@@ -12,6 +12,10 @@
       <symbol id="i-gear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2" /><path d="M8 1.8v1.6M8 12.6v1.6M14.2 8h-1.6M3.4 8H1.8M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1M12.4 12.4l-1.1-1.1M4.7 4.7L3.6 3.6" /></symbol>
       <symbol id="i-folder" viewBox="0 0 16 16"><path d="M2 4.5c0-.6.4-1 1-1h3.2l1.5 1.5H13c.6 0 1 .4 1 1v6c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1z" /></symbol>
       <symbol id="i-restart" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v2.8h-2.8" /></symbol>
+      <symbol id="i-l-tabs" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5" /></symbol>
+      <symbol id="i-l-columns" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5" /><path d="M8 3v10" /></symbol>
+      <symbol id="i-l-rows" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5" /><path d="M2.5 8h11" /></symbol>
+      <symbol id="i-l-grid" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5" /><path d="M8 3v10M2.5 8h11" /></symbol>
       <symbol id="i-logo" viewBox="0 0 16 16"><path d="M4 5l3 3-3 3M8.5 11.5H12" /></symbol>
     </svg>
 
@@ -41,7 +45,14 @@
           <span id="tb-name" class="tb-name"></span>
           <span id="tb-path" class="tb-path"></span>
         </div>
+        <span id="tb-split-label" class="tb-split-label"></span>
         <div id="tb-chips" class="chips-row"></div>
+        <div id="layout-switch" class="layout-switch" role="group" aria-label="Layout">
+          <button data-layout="tabs" title="Tabs: one session at a time"><svg class="ic"><use href="#i-l-tabs" /></svg></button>
+          <button data-layout="columns" title="Side by side"><svg class="ic"><use href="#i-l-columns" /></svg></button>
+          <button data-layout="rows" title="Stacked"><svg class="ic"><use href="#i-l-rows" /></svg></button>
+          <button data-layout="grid" title="Grid"><svg class="ic"><use href="#i-l-grid" /></svg></button>
+        </div>
         <div class="tb-actions">
           <button id="tb-restart" class="icon-btn" title="Restart session">
             <svg class="ic"><use href="#i-restart" /></svg>

@@ -6,7 +6,8 @@ It runs the real `claude` binary in a pseudo-terminal (via `portable-pty`) and r
 Every Claude Code feature — slash commands, permission prompts, plan mode, MCP, hooks — works the same as in your terminal.
 The app adds a window around it:
 
-- **Tabs** – run several sessions side by side, each in its own project folder
+- **Tabs or split view** – run several sessions, each in its own project folder, one at a time or
+  side by side, stacked, or in a grid (switcher in the header bar, or ⌘\\ / Ctrl+Shift+\\ to cycle)
 - **Launch options** – folder picker, recent folders, model, permission mode, `--continue`, any extra args
 - **Exit / restart** – a banner when Claude exits; Restart (or press Enter) to start again
 - **Drag & drop** – drop files onto a session to insert their paths; drop a folder with no session running to start one there
@@ -56,6 +57,7 @@ The builds aren't code-signed, so the first launch shows a warning:
 | New session | ⌘T | Ctrl+Shift+T |
 | Close session | ⌘W | Ctrl+Shift+W |
 | Settings | ⌘, | Ctrl+Shift+, |
+| Cycle layout (tabs → side by side → stacked → grid) | ⌘\\ | Ctrl+Shift+\\ |
 | Switch tab | Ctrl+Tab / Ctrl+Shift+Tab | same |
 | Jump to tab N | ⌘1–9 | Ctrl+Shift+1–9 |
 | Copy / paste | ⌘C / ⌘V | Ctrl+Shift+C / Ctrl+Shift+V |

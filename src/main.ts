@@ -131,6 +131,7 @@ const theme = {
 class Session {
   readonly key = crypto.randomUUID();
   readonly el: HTMLDivElement;
+  readonly body: HTMLDivElement;
   readonly term: Terminal;
   readonly fit = new FitAddon();
   readonly tab: HTMLLIElement;
@@ -142,6 +143,24 @@ class Session {
   constructor(readonly opts: LaunchOptions) {
     this.el = document.createElement("div");
     this.el.className = "term";
+    this.el.innerHTML = `
+      <div class="pane-head">
+        <span class="dot"></span>
+        <span class="pane-name"></span>
+        <span class="pane-path"></span>
+        <span class="chips-row"></span>
+        <button class="icon-btn" data-act="restart" title="Restart session">${icon("restart")}</button>
+        <button class="icon-btn" data-act="close" title="Close session">${icon("x")}</button>
+      </div>
+      <div class="term-body"></div>`;
+    this.el.querySelector(".pane-name")!.textContent = basename(opts.cwd);
+    this.el.querySelector(".pane-path")!.textContent = opts.cwd;
+    this.el.querySelector(".chips-row")!.append(...chipsFor(opts));
+    this.el.querySelector('[data-act="restart"]')!.addEventListener("click", () => this.restart());
+    this.el.querySelector('[data-act="close"]')!.addEventListener("click", () => closeSession(this));
+    // Clicking anywhere in a pane makes it the active session.
+    this.el.addEventListener("mousedown", () => active !== this && activate(this, false));
+    this.body = this.el.querySelector(".term-body")!;
     $("#terminals").appendChild(this.el);
 
     this.term = new Terminal({
@@ -161,7 +180,8 @@ class Session {
     });
     this.term.loadAddon(this.fit);
     this.term.loadAddon(new WebLinksAddon((_e, uri) => void openUrl(uri)));
-    this.term.open(this.el);
+    this.term.open(this.body);
+    this.term.textarea?.addEventListener("focus", () => active !== this && activate(this, false));
 
     this.term.attachCustomKeyEventHandler((e) => this.handleKey(e));
     this.term.onData((data) => this.write(data));
@@ -169,7 +189,7 @@ class Session {
       if (this.ptyId != null) void invoke("pty_resize", { id: this.ptyId, cols, rows }).catch(() => {});
     });
     this.resizeObs = new ResizeObserver(() => this.refit());
-    this.resizeObs.observe(this.el);
+    this.resizeObs.observe(this.body);
 
     this.tab = document.createElement("li");
     this.tab.innerHTML = `
@@ -222,7 +242,7 @@ class Session {
   }
 
   refit() {
-    if (this.el.offsetParent === null) return; // hidden
+    if (this.body.offsetParent === null) return; // hidden
     try {
       this.fit.fit();
     } catch {
@@ -301,6 +321,7 @@ class Session {
 
   private setStatus(s: "running" | "exited" | "error") {
     this.tab.dataset.status = s;
+    this.el.dataset.status = s;
     if (active === this) updateTopbar();
   }
 
@@ -316,7 +337,47 @@ class Session {
 const sessions: Session[] = [];
 let active: Session | null = null;
 
-function activate(s: Session) {
+type Layout = "tabs" | "columns" | "rows" | "grid";
+const LAYOUTS: Layout[] = ["tabs", "columns", "rows", "grid"];
+let layout: Layout = LAYOUTS.includes(store.getList("layout")[0] as Layout)
+  ? (store.getList("layout")[0] as Layout)
+  : "tabs";
+
+function setLayout(l: Layout) {
+  layout = l;
+  store.set("layout", [l]);
+  applyLayout();
+  if (active) activate(active);
+}
+
+function applyLayout() {
+  const box = $("#terminals");
+  const n = sessions.length;
+  const split = layout !== "tabs" && n > 1;
+  box.className = split ? `split ${layout}` : "tabs";
+  let cols = 1;
+  let rows = 1;
+  if (split && layout === "columns") cols = n;
+  if (split && layout === "rows") rows = n;
+  if (split && layout === "grid") {
+    cols = Math.ceil(Math.sqrt(n));
+    rows = Math.ceil(n / cols);
+  }
+  box.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+  box.style.gridTemplateRows = `repeat(${rows}, minmax(0, 1fr))`;
+  // In a grid with a short last row, stretch the final pane across the gap.
+  sessions.forEach((x, i) => {
+    const last = i === n - 1;
+    x.el.style.gridColumn = split && layout === "grid" && last ? `${(i % cols) + 1} / -1` : "";
+  });
+  for (const b of document.querySelectorAll<HTMLButtonElement>("#layout-switch button")) {
+    b.classList.toggle("on", b.dataset.layout === layout);
+  }
+  document.body.classList.toggle("is-split", split);
+  requestAnimationFrame(() => sessions.forEach((x) => x.refit()));
+}
+
+function activate(s: Session, focus = true) {
   active = s;
   for (const x of sessions) {
     x.el.classList.toggle("active", x === s);
@@ -324,6 +385,7 @@ function activate(s: Session) {
   }
   $("#empty").hidden = true;
   updateTopbar();
+  if (!focus) return;
   requestAnimationFrame(() => {
     s.refit();
     s.term.focus();
@@ -336,6 +398,19 @@ const PERM_LABELS: Record<string, string> = {
   bypassPermissions: "Bypass permissions",
 };
 
+function chipsFor(o: LaunchOptions): HTMLSpanElement[] {
+  const chips: [string, boolean][] = [];
+  if (o.model) chips.push([o.model[0].toUpperCase() + o.model.slice(1), false]);
+  if (o.permissionMode) chips.push([PERM_LABELS[o.permissionMode] ?? o.permissionMode, o.permissionMode === "bypassPermissions"]);
+  if (o.continueLast) chips.push(["Continued", false]);
+  return chips.map(([label, warn]) => {
+    const c = document.createElement("span");
+    c.className = warn ? "chip warn" : "chip";
+    c.textContent = label;
+    return c;
+  });
+}
+
 function updateTopbar() {
   const bar = $("#topbar");
   bar.hidden = !active;
@@ -347,18 +422,9 @@ function updateTopbar() {
   const o = active.opts;
   $("#tb-name").textContent = basename(o.cwd);
   $("#tb-path").textContent = o.cwd;
-  const chips: [string, boolean][] = [];
-  if (o.model) chips.push([o.model[0].toUpperCase() + o.model.slice(1), false]);
-  if (o.permissionMode) chips.push([PERM_LABELS[o.permissionMode] ?? o.permissionMode, o.permissionMode === "bypassPermissions"]);
-  if (o.continueLast) chips.push(["Continued", false]);
-  const row = $("#tb-chips");
-  row.innerHTML = "";
-  for (const [label, warn] of chips) {
-    const c = document.createElement("span");
-    c.className = warn ? "chip warn" : "chip";
-    c.textContent = label;
-    row.appendChild(c);
-  }
+  $("#tb-chips").replaceChildren(...chipsFor(o));
+  const name = { tabs: "Tabs", columns: "Side by side", rows: "Stacked", grid: "Grid" }[layout];
+  $("#tb-split-label").textContent = `${sessions.length} sessions · ${name}`;
 }
 
 function closeSession(s: Session) {
@@ -366,6 +432,7 @@ function closeSession(s: Session) {
   const i = sessions.indexOf(s);
   sessions.splice(i, 1);
   s.dispose();
+  applyLayout();
   if (active === s) {
     const next = sessions[Math.min(i, sessions.length - 1)];
     if (next) activate(next);
@@ -381,6 +448,7 @@ function startSession(opts: LaunchOptions) {
   pushRecent(opts.cwd);
   const s = new Session(opts);
   sessions.push(s);
+  applyLayout();
   activate(s);
   // Wait a frame so the terminal has its real size before spawning.
   requestAnimationFrame(() => void s.start());
@@ -513,7 +581,7 @@ async function checkCli() {
 
 function isAppShortcut(e: KeyboardEvent): boolean {
   const mod = isMac ? e.metaKey : e.ctrlKey && e.shiftKey;
-  if (mod && ["KeyT", "KeyW", "Comma"].includes(e.code)) return true;
+  if (mod && ["KeyT", "KeyW", "Comma", "Backslash"].includes(e.code)) return true;
   if (e.ctrlKey && e.key === "Tab") return true;
   if (mod && /^Digit[1-9]$/.test(e.code)) return true;
   return false;
@@ -525,6 +593,7 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "KeyT") openNewDialog();
   else if (e.code === "KeyW" && active) closeSession(active);
   else if (e.code === "Comma") openSettings();
+  else if (e.code === "Backslash") setLayout(LAYOUTS[(LAYOUTS.indexOf(layout) + 1) % LAYOUTS.length]);
   else if (e.key === "Tab" && active && sessions.length > 1) {
     const i = sessions.indexOf(active);
     activate(sessions[(i + (e.shiftKey ? -1 : 1) + sessions.length) % sessions.length]);
@@ -568,7 +637,13 @@ void Promise.all(
   ["400", "600"].map((w) => document.fonts.load(`${w} ${settings.fontSize}px "JetBrains Mono"`)),
 ).catch(() => {});
 
+for (const b of document.querySelectorAll<HTMLButtonElement>("#layout-switch button")) {
+  b.addEventListener("click", () => setLayout(b.dataset.layout as Layout));
+  b.title += ` (${isMac ? "⌘\\" : "Ctrl+Shift+\\"} to cycle)`;
+}
+
 showEmpty();
+applyLayout();
 updateTopbar();
 void checkCli();
 
