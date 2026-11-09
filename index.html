@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Claude Desk</title>
+  </head>
+  <body>
+    <aside id="sidebar">
+      <header>
+        <span class="brand"><span class="prompt">&gt;_</span> Claude Desk</span>
+      </header>
+      <button id="new-btn" class="primary" title="New session (Ctrl/⌘+Shift+T)">+ New session</button>
+      <ul id="tabs"></ul>
+      <footer>
+        <span id="cli-status" class="cli-status">Checking CLI…</span>
+        <button id="settings-btn" class="icon" title="Settings">⚙</button>
+      </footer>
+    </aside>
+
+    <main id="main">
+      <div id="empty" class="empty">
+        <h1>Claude Code, in a window</h1>
+        <p>Pick a project folder to start a session.</p>
+        <button id="empty-open" class="primary">Open folder…</button>
+        <h3 id="recent-title">Recent</h3>
+        <ul id="recent"></ul>
+      </div>
+      <div id="terminals"></div>
+    </main>
+
+    <dialog id="new-dialog">
+      <form method="dialog" id="new-form">
+        <h2>New session</h2>
+        <label>Project folder
+          <div class="row">
+            <input id="f-cwd" required placeholder="/path/to/project" />
+            <button type="button" id="f-browse">Browse…</button>
+          </div>
+        </label>
+        <div id="f-recent" class="chips"></div>
+        <div class="grid">
+          <label>Model
+            <select id="f-model">
+              <option value="">Default</option>
+              <option value="opus">Opus</option>
+              <option value="sonnet">Sonnet</option>
+              <option value="haiku">Haiku</option>
+            </select>
+          </label>
+          <label>Permission mode
+            <select id="f-perm">
+              <option value="">Default (ask)</option>
+              <option value="acceptEdits">Accept edits</option>
+              <option value="plan">Plan</option>
+              <option value="bypassPermissions">Bypass permissions</option>
+            </select>
+          </label>
+        </div>
+        <label class="check"><input type="checkbox" id="f-continue" /> Continue the most recent conversation</label>
+        <label>Extra arguments
+          <input id="f-extra" placeholder='e.g. --add-dir ../shared --verbose' />
+        </label>
+        <menu>
+          <button type="button" class="cancel">Cancel</button>
+          <button value="ok" class="primary">Start</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="settings-dialog">
+      <form method="dialog" id="settings-form">
+        <h2>Settings</h2>
+        <label>Claude binary
+          <input id="s-binary" placeholder="Leave empty to find `claude` on your PATH" />
+        </label>
+        <label>Font size
+          <input id="s-font" type="number" min="9" max="28" />
+        </label>
+        <menu>
+          <button type="button" class="cancel">Cancel</button>
+          <button value="ok" class="primary">Save</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
