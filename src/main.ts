@@ -230,7 +230,7 @@ class Session {
         <button class="icon-btn" data-act="restart" title="Restart session">${icon("restart")}</button>
         <button class="icon-btn" data-act="close" title="Close session">${icon("x")}</button>
       </div>
-      <div class="term-body"></div>`;
+      <div class="term-body"><div class="term-host"></div></div>`;
     this.el.querySelector(".pane-name")!.textContent = basename(opts.cwd);
     this.el.querySelector(".pane-path")!.textContent = opts.cwd;
     this.el.querySelector(".chips-row")!.append(...chipsFor(opts));
@@ -263,7 +263,9 @@ class Session {
     this.term.loadAddon(this.fit);
     this.term.loadAddon(this.search);
     this.term.loadAddon(new WebLinksAddon((_e, uri) => void openUrl(uri)));
-    this.term.open(this.body);
+    // Open into an unpadded host: FitAddon measures the parent including
+    // padding, so padding on the parent would make it propose too many rows/cols.
+    this.term.open(this.body.querySelector<HTMLDivElement>(".term-host")!);
     this.term.textarea?.addEventListener("focus", () => active !== this && activate(this, false));
 
     this.term.attachCustomKeyEventHandler((e) => this.handleKey(e));
@@ -486,6 +488,10 @@ class Session {
         onData,
         onExit,
       });
+      // The pane may have been resized while the process was starting (resize
+      // events are dropped until we have an id), so sync the size once more.
+      this.refit();
+      void invoke("pty_resize", { id: this.ptyId, cols: this.term.cols, rows: this.term.rows }).catch(() => {});
     } catch (err) {
       this.term.write(`\r\n\x1b[31mCould not start Claude Code:\x1b[0m ${err}\r\n`);
       this.exited(null);
