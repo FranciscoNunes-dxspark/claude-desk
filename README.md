@@ -33,6 +33,22 @@ Build an installer (`.dmg` / `.msi` / `.deb` / `.AppImage`, depending on the OS)
 npm run tauri build
 ```
 
+## Installers
+
+Pushing a tag such as `v0.1.0` (or using **Actions → Release → Run workflow**) builds installers
+for macOS (Apple Silicon and Intel), Windows and Linux. The workflow attaches them to a **draft** release
+under **Releases**; publish it when you're happy.
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+The builds aren't code-signed, so the first launch shows a warning:
+
+- **macOS:** right-click the app → **Open** → **Open**. If it says the app is "damaged", run
+  `xattr -cr "/Applications/Claude Desk.app"`.
+- **Windows:** SmartScreen → **More info** → **Run anyway**.
+
 ## Shortcuts
 
 | Action | macOS | Linux / Windows |
