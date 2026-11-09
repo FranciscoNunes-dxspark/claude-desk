@@ -6,9 +6,21 @@ It runs the real `claude` binary in a pseudo-terminal (via `portable-pty`) and r
 Every Claude Code feature — slash commands, permission prompts, plan mode, MCP, hooks — works the same as in your terminal.
 The app adds a window around it:
 
-- **Tabs or split view** – run several sessions, each in its own project folder, one at a time or
-  side by side, stacked, or in a grid (switcher in the header bar, or ⌘\\ / Ctrl+Shift+\\ to cycle)
-- **Launch options** – folder picker, recent folders, model, permission mode, `--continue`, any extra args
+- **Tabs or split view** – run several sessions, one at a time or side by side, stacked, or in a grid
+  (switcher in the header bar, or ⌘\\ / Ctrl+Shift+\\ to cycle). Drag the dividers to resize panes
+  (double-click a divider to even them out); double-click a pane's header or press ⌘↵ / Ctrl+Shift+↵ to
+  maximise it.
+- **Needs-attention alerts** – when a session you're not looking at finishes working (or rings the
+  terminal bell / sends a notification), its tab and pane are badged and, if the window isn't focused,
+  you get a desktop notification. Turn notifications off in Settings.
+- **Resume conversations** – the New session dialog can start fresh, continue the latest conversation,
+  or pick any earlier conversation in that folder (read from `~/.claude/projects`).
+- **Paste images** – paste a screenshot (⌘V, or Ctrl+Shift+V) and it's saved to a temp file and its path
+  is typed into the prompt, which Claude Code reads as an image.
+- **Search** – ⌘F / Ctrl+Shift+F searches the terminal's scrollback.
+- **Git branch** – each session's header shows the current branch.
+- **Dark, light or system theme** – in Settings.
+- **Launch options** – folder picker, recent folders, model, permission mode, any extra args
 - **Exit / restart** – a banner when Claude exits; Restart (or press Enter) to start again
 - **Drag & drop** – drop files onto a session to insert their paths; drop a folder with no session running to start one there
 - **CLI status** – shows the detected Claude Code version, or "CLI not found"
@@ -57,10 +69,12 @@ The builds aren't code-signed, so the first launch shows a warning:
 | New session | ⌘T | Ctrl+Shift+T |
 | Close session | ⌘W | Ctrl+Shift+W |
 | Settings | ⌘, | Ctrl+Shift+, |
+| Search terminal | ⌘F | Ctrl+Shift+F |
+| Maximise / restore pane | ⌘↵ | Ctrl+Shift+↵ |
 | Cycle layout (tabs → side by side → stacked → grid) | ⌘\\ | Ctrl+Shift+\\ |
 | Switch tab | Ctrl+Tab / Ctrl+Shift+Tab | same |
 | Jump to tab N | ⌘1–9 | Ctrl+Shift+1–9 |
-| Copy / paste | ⌘C / ⌘V | Ctrl+Shift+C / Ctrl+Shift+V |
+| Copy / paste (text or image) | ⌘C / ⌘V | Ctrl+Shift+C / Ctrl+Shift+V |
 
 Plain Ctrl+T, Ctrl+C and the like go to Claude Code itself.
 
@@ -80,9 +94,13 @@ If the sidebar says **CLI not found**, run `which claude` (or `where claude`) in
 ```
 src/main.ts            UI: tabs, dialogs, xterm.js sessions
 src/style.css
-src-tauri/src/pty.rs   PTY spawn / write / resize / kill, `claude --version`
+src-tauri/src/pty.rs   PTY spawn / write / resize / kill, flow control, `claude --version`
+src-tauri/src/extras.rs  conversations, git branch, clipboard images
+src/themes.ts          terminal colours for dark and light
 src-tauri/src/lib.rs   Tauri setup
 ```
+
+`src-tauri/src/extras.rs` lists past conversations, reads the git branch and saves pasted images.
 
 Output streams from Rust to the webview as raw bytes over a Tauri `Channel`; keystrokes go back through the `pty_write` command.
 Closing the app kills any running sessions.

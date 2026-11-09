@@ -131,6 +131,7 @@ fn launch_spec(binary: Option<&str>, args: &[String]) -> (String, Vec<String>) {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn pty_spawn(
     app: AppHandle,
     state: State<'_, PtyState>,

@@ -1,9 +1,11 @@
+mod extras;
 mod pty;
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(pty::PtyState::default())
         .invoke_handler(tauri::generate_handler![
             pty::pty_spawn,
@@ -12,6 +14,9 @@ pub fn run() {
             pty::pty_ack,
             pty::pty_kill,
             pty::claude_version,
+            extras::list_conversations,
+            extras::git_branch,
+            extras::save_clipboard_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

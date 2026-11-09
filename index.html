@@ -16,6 +16,13 @@
       <symbol id="i-l-columns" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5" /><path d="M8 3v10" /></symbol>
       <symbol id="i-l-rows" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5" /><path d="M2.5 8h11" /></symbol>
       <symbol id="i-l-grid" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5" /><path d="M8 3v10M2.5 8h11" /></symbol>
+      <symbol id="i-max" viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5L9 7M2.5 13.5L7 9" /></symbol>
+      <symbol id="i-restore" viewBox="0 0 16 16"><path d="M13.5 6.5h-4v-4M2.5 9.5h4v4M9.5 6.5L14 2M6.5 9.5L2 14" /></symbol>
+      <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.25" /><path d="M10.2 10.2L13.5 13.5" /></symbol>
+      <symbol id="i-branch" viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5.5" r="1.5" /><path d="M4.5 5v6M11.5 7c0 3-7 2-7 4" /></symbol>
+      <symbol id="i-up" viewBox="0 0 16 16"><path d="M4 10l4-4 4 4" /></symbol>
+      <symbol id="i-down" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></symbol>
+      <symbol id="i-history" viewBox="0 0 16 16"><path d="M2.8 8a5.2 5.2 0 1 0 1.5-3.7M2.5 2.5v2.8h2.8M8 5v3.2l2 1.3" /></symbol>
       <symbol id="i-logo" viewBox="0 0 16 16"><path d="M4 5l3 3-3 3M8.5 11.5H12" /></symbol>
     </svg>
 
@@ -44,9 +51,11 @@
         <div class="crumb" data-tauri-drag-region>
           <span id="tb-name" class="tb-name"></span>
           <span id="tb-path" class="tb-path"></span>
+          <span id="tb-branch" class="branch" hidden></span>
         </div>
         <span id="tb-split-label" class="tb-split-label"></span>
         <div id="tb-chips" class="chips-row"></div>
+        <button id="tb-search" class="icon-btn" title="Search terminal"><svg class="ic"><use href="#i-search" /></svg></button>
         <div id="layout-switch" class="layout-switch" role="group" aria-label="Layout">
           <button data-layout="tabs" title="Tabs: one session at a time"><svg class="ic"><use href="#i-l-tabs" /></svg></button>
           <button data-layout="columns" title="Side by side"><svg class="ic"><use href="#i-l-columns" /></svg></button>
@@ -81,6 +90,15 @@
         </div>
       </div>
       <div id="terminals"></div>
+
+      <div id="searchbar" class="searchbar" hidden>
+        <svg class="ic"><use href="#i-search" /></svg>
+        <input id="search-input" placeholder="Search" spellcheck="false" />
+        <span id="search-count" class="search-count"></span>
+        <button id="search-prev" class="icon-btn" title="Previous (Shift+Enter)"><svg class="ic"><use href="#i-up" /></svg></button>
+        <button id="search-next" class="icon-btn" title="Next (Enter)"><svg class="ic"><use href="#i-down" /></svg></button>
+        <button id="search-close" class="icon-btn" title="Close (Esc)"><svg class="ic"><use href="#i-x" /></svg></button>
+      </div>
     </main>
 
     <dialog id="new-dialog">
@@ -112,11 +130,16 @@
             <button type="button" data-v="bypassPermissions">Bypass</button>
           </div>
         </div>
-        <label class="toggle">
-          <input type="checkbox" id="f-continue" />
-          <span class="switch"></span>
-          <span>Continue the most recent conversation</span>
-        </label>
+        <div class="field">
+          <span class="label">Conversation</span>
+          <div class="segmented" id="f-conv">
+            <button type="button" data-v="new">New</button>
+            <button type="button" data-v="continue">Continue latest</button>
+            <button type="button" data-v="resume">Resume…</button>
+          </div>
+          <span id="f-conv-hint" class="hint"></span>
+          <ul id="f-resume-list" class="resume-list" hidden></ul>
+        </div>
         <div class="field">
           <span class="label">Extra arguments</span>
           <input id="f-extra" class="mono" placeholder="--add-dir ../shared --verbose" spellcheck="false" />
@@ -137,9 +160,23 @@
           <span class="hint">Leave empty to auto-detect. Run <code>which claude</code> to find it.</span>
         </div>
         <div class="field">
+          <span class="label">Appearance</span>
+          <div class="segmented" id="s-theme">
+            <button type="button" data-v="system">System</button>
+            <button type="button" data-v="dark">Dark</button>
+            <button type="button" data-v="light">Light</button>
+          </div>
+          <span class="hint">Claude Code picks its own colours too: run <code>/theme</code> in a session to match.</span>
+        </div>
+        <div class="field">
           <span class="label">Terminal font size</span>
           <input id="s-font" type="number" min="9" max="28" />
         </div>
+        <label class="toggle">
+          <input type="checkbox" id="s-notify" />
+          <span class="switch"></span>
+          <span>Notify me when a background session needs attention</span>
+        </label>
         <menu>
           <button type="button" class="btn cancel">Cancel</button>
           <button value="ok" class="btn primary">Save</button>
