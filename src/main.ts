@@ -6,6 +6,7 @@ import "./style.css";
 
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { CanvasAddon } from "@xterm/addon-canvas";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Channel, invoke } from "@tauri-apps/api/core";
@@ -266,6 +267,14 @@ class Session {
     // Open into an unpadded host: FitAddon measures the parent including
     // padding, so padding on the parent would make it propose too many rows/cols.
     this.term.open(this.body.querySelector<HTMLDivElement>(".term-host")!);
+    // The canvas renderer draws block and box-drawing characters itself, so
+    // Claude's logo and borders join up exactly instead of depending on the
+    // font (the DOM renderer leaves gaps between rows and mixes fallback fonts).
+    try {
+      this.term.loadAddon(new CanvasAddon());
+    } catch {
+      /* canvas unavailable: keep the DOM renderer */
+    }
     this.term.textarea?.addEventListener("focus", () => active !== this && activate(this, false));
 
     this.term.attachCustomKeyEventHandler((e) => this.handleKey(e));
