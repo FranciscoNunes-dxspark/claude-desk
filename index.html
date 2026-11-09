@@ -6,25 +6,68 @@
     <title>Claude Desk</title>
   </head>
   <body>
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9" /></symbol>
+      <symbol id="i-x" viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" /></symbol>
+      <symbol id="i-gear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2" /><path d="M8 1.8v1.6M8 12.6v1.6M14.2 8h-1.6M3.4 8H1.8M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1M12.4 12.4l-1.1-1.1M4.7 4.7L3.6 3.6" /></symbol>
+      <symbol id="i-folder" viewBox="0 0 16 16"><path d="M2 4.5c0-.6.4-1 1-1h3.2l1.5 1.5H13c.6 0 1 .4 1 1v6c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1z" /></symbol>
+      <symbol id="i-restart" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v2.8h-2.8" /></symbol>
+      <symbol id="i-logo" viewBox="0 0 16 16"><path d="M4 5l3 3-3 3M8.5 11.5H12" /></symbol>
+    </svg>
+
     <aside id="sidebar">
-      <header>
-        <span class="brand"><span class="prompt">&gt;_</span> Claude Desk</span>
+      <header data-tauri-drag-region>
+        <span class="logo"><svg><use href="#i-logo" /></svg></span>
+        <span class="brand" data-tauri-drag-region>Claude Desk</span>
       </header>
-      <button id="new-btn" class="primary" title="New session (Ctrl/⌘+Shift+T)">+ New session</button>
+      <button id="new-btn" class="new-btn">
+        <svg class="ic"><use href="#i-plus" /></svg>
+        <span>New session</span>
+        <kbd id="new-kbd"></kbd>
+      </button>
+      <div class="section-label">Sessions <span id="tab-count"></span></div>
       <ul id="tabs"></ul>
       <footer>
         <span id="cli-status" class="cli-status">Checking CLI…</span>
-        <button id="settings-btn" class="icon" title="Settings">⚙</button>
+        <button id="settings-btn" class="icon-btn" title="Settings">
+          <svg class="ic"><use href="#i-gear" /></svg>
+        </button>
       </footer>
     </aside>
 
     <main id="main">
+      <div id="topbar" data-tauri-drag-region hidden>
+        <div class="crumb" data-tauri-drag-region>
+          <span id="tb-name" class="tb-name"></span>
+          <span id="tb-path" class="tb-path"></span>
+        </div>
+        <div id="tb-chips" class="chips-row"></div>
+        <div class="tb-actions">
+          <button id="tb-restart" class="icon-btn" title="Restart session">
+            <svg class="ic"><use href="#i-restart" /></svg>
+          </button>
+          <button id="tb-close" class="icon-btn" title="Close session">
+            <svg class="ic"><use href="#i-x" /></svg>
+          </button>
+        </div>
+      </div>
+
       <div id="empty" class="empty">
-        <h1>Claude Code, in a window</h1>
-        <p>Pick a project folder to start a session.</p>
-        <button id="empty-open" class="primary">Open folder…</button>
-        <h3 id="recent-title">Recent</h3>
-        <ul id="recent"></ul>
+        <div class="hero" data-tauri-drag-region>
+          <div class="hero-mark"><svg><use href="#i-logo" /></svg></div>
+          <h1>Start a Claude Code session</h1>
+          <p>Choose a project folder. Each session runs the real <code>claude</code> CLI in its own tab.</p>
+          <div class="hero-actions">
+            <button id="empty-open" class="btn primary">
+              <svg class="ic"><use href="#i-folder" /></svg> Open folder…
+            </button>
+            <button id="empty-new" class="btn">More options</button>
+          </div>
+          <div id="recent-wrap">
+            <div class="section-label">Recent</div>
+            <ul id="recent"></ul>
+          </div>
+        </div>
       </div>
       <div id="terminals"></div>
     </main>
@@ -32,38 +75,44 @@
     <dialog id="new-dialog">
       <form method="dialog" id="new-form">
         <h2>New session</h2>
-        <label>Project folder
-          <div class="row">
-            <input id="f-cwd" required placeholder="/path/to/project" />
-            <button type="button" id="f-browse">Browse…</button>
+        <div class="field">
+          <span class="label">Project folder</span>
+          <div class="input-group">
+            <input id="f-cwd" required placeholder="/path/to/project" spellcheck="false" />
+            <button type="button" id="f-browse" class="btn">Browse</button>
           </div>
-        </label>
-        <div id="f-recent" class="chips"></div>
-        <div class="grid">
-          <label>Model
-            <select id="f-model">
-              <option value="">Default</option>
-              <option value="opus">Opus</option>
-              <option value="sonnet">Sonnet</option>
-              <option value="haiku">Haiku</option>
-            </select>
-          </label>
-          <label>Permission mode
-            <select id="f-perm">
-              <option value="">Default (ask)</option>
-              <option value="acceptEdits">Accept edits</option>
-              <option value="plan">Plan</option>
-              <option value="bypassPermissions">Bypass permissions</option>
-            </select>
-          </label>
+          <div id="f-recent" class="chips"></div>
         </div>
-        <label class="check"><input type="checkbox" id="f-continue" /> Continue the most recent conversation</label>
-        <label>Extra arguments
-          <input id="f-extra" placeholder='e.g. --add-dir ../shared --verbose' />
+        <div class="field">
+          <span class="label">Model</span>
+          <div class="segmented" id="f-model">
+            <button type="button" data-v="">Default</button>
+            <button type="button" data-v="opus">Opus</button>
+            <button type="button" data-v="sonnet">Sonnet</button>
+            <button type="button" data-v="haiku">Haiku</button>
+          </div>
+        </div>
+        <div class="field">
+          <span class="label">Permissions</span>
+          <div class="segmented" id="f-perm">
+            <button type="button" data-v="">Ask</button>
+            <button type="button" data-v="acceptEdits">Accept edits</button>
+            <button type="button" data-v="plan">Plan</button>
+            <button type="button" data-v="bypassPermissions">Bypass</button>
+          </div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="f-continue" />
+          <span class="switch"></span>
+          <span>Continue the most recent conversation</span>
         </label>
+        <div class="field">
+          <span class="label">Extra arguments</span>
+          <input id="f-extra" class="mono" placeholder="--add-dir ../shared --verbose" spellcheck="false" />
+        </div>
         <menu>
-          <button type="button" class="cancel">Cancel</button>
-          <button value="ok" class="primary">Start</button>
+          <button type="button" class="btn cancel">Cancel</button>
+          <button value="ok" class="btn primary">Start session <kbd>↵</kbd></button>
         </menu>
       </form>
     </dialog>
@@ -71,15 +120,18 @@
     <dialog id="settings-dialog">
       <form method="dialog" id="settings-form">
         <h2>Settings</h2>
-        <label>Claude binary
-          <input id="s-binary" placeholder="Leave empty to find `claude` on your PATH" />
-        </label>
-        <label>Font size
+        <div class="field">
+          <span class="label">Claude binary</span>
+          <input id="s-binary" class="mono" placeholder="Auto-detect from PATH" spellcheck="false" />
+          <span class="hint">Leave empty to auto-detect. Run <code>which claude</code> to find it.</span>
+        </div>
+        <div class="field">
+          <span class="label">Terminal font size</span>
           <input id="s-font" type="number" min="9" max="28" />
-        </label>
+        </div>
         <menu>
-          <button type="button" class="cancel">Cancel</button>
-          <button value="ok" class="primary">Save</button>
+          <button type="button" class="btn cancel">Cancel</button>
+          <button value="ok" class="btn primary">Save</button>
         </menu>
       </form>
     </dialog>

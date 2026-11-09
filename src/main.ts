@@ -1,4 +1,7 @@
 import "@xterm/xterm/css/xterm.css";
+import "@fontsource-variable/inter";
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/600.css";
 import "./style.css";
 
 import { Terminal } from "@xterm/xterm";
@@ -69,6 +72,7 @@ function pushRecent(dir: string) {
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const isMac = navigator.platform.toUpperCase().includes("MAC");
+const icon = (name: string) => `<svg class="ic"><use href="#i-${name}" /></svg>`;
 
 function basename(p: string) {
   const parts = p.replace(/[\\/]+$/, "").split(/[\\/]/);
@@ -97,11 +101,13 @@ function shellQuote(path: string) {
 }
 
 const theme = {
-  background: "#1a1918",
+  background: "#141413",
   foreground: "#e8e6dc",
   cursor: "#d97757",
-  cursorAccent: "#1a1918",
-  selectionBackground: "#d9775755",
+  cursorAccent: "#141413",
+  selectionBackground: "#d9775750",
+  scrollbarSliderBackground: "#ffffff1a",
+  scrollbarSliderHoverBackground: "#ffffff2a",
   black: "#262624",
   red: "#e5736a",
   green: "#8fbf7f",
@@ -129,6 +135,7 @@ class Session {
   readonly fit = new FitAddon();
   readonly tab: HTMLLIElement;
   private ptyId: number | null = null;
+  private restartPending = false;
   private banner: HTMLDivElement | null = null;
   private resizeObs: ResizeObserver;
 
@@ -138,8 +145,14 @@ class Session {
     $("#terminals").appendChild(this.el);
 
     this.term = new Terminal({
-      fontFamily: '"JetBrains Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace',
+      fontFamily: '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace',
       fontSize: settings.fontSize,
+      fontWeight: "400",
+      fontWeightBold: "600",
+      lineHeight: 1.2,
+      cursorStyle: "bar",
+      cursorWidth: 2,
+      minimumContrastRatio: 1,
       cursorBlink: true,
       allowProposedApi: true,
       scrollback: 10000,
@@ -162,9 +175,10 @@ class Session {
     this.tab.innerHTML = `
       <span class="dot"></span>
       <span class="meta"><span class="name"></span><span class="path"></span></span>
-      <button class="close" title="Close session">×</button>`;
+      <kbd></kbd>
+      <button class="icon-btn close" title="Close session">${icon("x")}</button>`;
     this.tab.querySelector(".name")!.textContent = basename(opts.cwd);
-    this.tab.querySelector(".path")!.textContent = opts.cwd;
+    this.tab.querySelector(".path")!.textContent = `\u200E${opts.cwd}\u200E`;
     this.tab.title = opts.cwd;
     this.tab.addEventListener("click", () => activate(this));
     this.tab.querySelector(".close")!.addEventListener("click", (e) => {
@@ -174,7 +188,7 @@ class Session {
     $("#tabs").appendChild(this.tab);
 
     this.term.onTitleChange((t) => {
-      if (t) this.tab.querySelector(".path")!.textContent = t;
+      if (t) this.tab.querySelector(".path")!.textContent = `\u200E${t}\u200E`;
     });
   }
 
@@ -258,13 +272,26 @@ class Session {
     }
   }
 
+  restart() {
+    if (this.ptyId == null) return void this.start();
+    this.restartPending = true;
+    void invoke("pty_kill", { id: this.ptyId }).catch(() => {});
+  }
+
   private exited(code: number | null) {
     this.ptyId = null;
+    if (this.restartPending) {
+      this.restartPending = false;
+      this.term.reset();
+      return void this.start();
+    }
     this.setStatus(code === 0 ? "exited" : "error");
     this.banner = document.createElement("div");
-    this.banner.className = "banner";
-    this.banner.innerHTML = `<span></span><button class="primary">Restart</button><button>Close</button>`;
-    this.banner.querySelector("span")!.textContent =
+    this.banner.className = code === 0 ? "banner" : "banner error";
+    this.banner.innerHTML = `<span class="msg"></span>
+      <button class="btn primary">${icon("restart")} Restart</button>
+      <button class="btn">Close</button>`;
+    this.banner.querySelector(".msg")!.textContent =
       code == null ? "Session ended" : `Claude exited with code ${code}`;
     const [restart, close] = this.banner.querySelectorAll("button");
     restart.addEventListener("click", () => void this.start());
@@ -274,6 +301,7 @@ class Session {
 
   private setStatus(s: "running" | "exited" | "error") {
     this.tab.dataset.status = s;
+    if (active === this) updateTopbar();
   }
 
   dispose() {
@@ -295,10 +323,42 @@ function activate(s: Session) {
     x.tab.classList.toggle("active", x === s);
   }
   $("#empty").hidden = true;
+  updateTopbar();
   requestAnimationFrame(() => {
     s.refit();
     s.term.focus();
   });
+}
+
+const PERM_LABELS: Record<string, string> = {
+  acceptEdits: "Accept edits",
+  plan: "Plan mode",
+  bypassPermissions: "Bypass permissions",
+};
+
+function updateTopbar() {
+  const bar = $("#topbar");
+  bar.hidden = !active;
+  sessions.forEach((x, i) => {
+    x.tab.querySelector("kbd")!.textContent = i < 9 ? (isMac ? `⌘${i + 1}` : `${i + 1}`) : "";
+  });
+  $("#tab-count").textContent = sessions.length ? String(sessions.length) : "";
+  if (!active) return;
+  const o = active.opts;
+  $("#tb-name").textContent = basename(o.cwd);
+  $("#tb-path").textContent = o.cwd;
+  const chips: [string, boolean][] = [];
+  if (o.model) chips.push([o.model[0].toUpperCase() + o.model.slice(1), false]);
+  if (o.permissionMode) chips.push([PERM_LABELS[o.permissionMode] ?? o.permissionMode, o.permissionMode === "bypassPermissions"]);
+  if (o.continueLast) chips.push(["Continued", false]);
+  const row = $("#tb-chips");
+  row.innerHTML = "";
+  for (const [label, warn] of chips) {
+    const c = document.createElement("span");
+    c.className = warn ? "chip warn" : "chip";
+    c.textContent = label;
+    row.appendChild(c);
+  }
 }
 
 function closeSession(s: Session) {
@@ -314,6 +374,7 @@ function closeSession(s: Session) {
       showEmpty();
     }
   }
+  updateTopbar();
 }
 
 function startSession(opts: LaunchOptions) {
@@ -332,10 +393,10 @@ function showEmpty() {
   const list = $("#recent");
   list.innerHTML = "";
   const recent = recentFolders();
-  $("#recent-title").hidden = recent.length === 0;
+  $("#recent-wrap").hidden = recent.length === 0;
   for (const dir of recent) {
     const li = document.createElement("li");
-    li.innerHTML = `<span class="name"></span><span class="path"></span>`;
+    li.innerHTML = `${icon("folder")}<span class="meta"><span class="name"></span><span class="path"></span></span>`;
     li.querySelector(".name")!.textContent = basename(dir);
     li.querySelector(".path")!.textContent = dir;
     li.addEventListener("click", () => startSession({ ...lastLaunch, cwd: dir }));
@@ -350,12 +411,27 @@ async function pickFolder(): Promise<string | null> {
   return typeof dir === "string" ? dir : null;
 }
 
+function setSegment(sel: string, value: string) {
+  for (const b of $(sel).querySelectorAll<HTMLButtonElement>("button")) {
+    b.classList.toggle("on", b.dataset.v === value);
+  }
+}
+function getSegment(sel: string): string {
+  return $(sel).querySelector<HTMLButtonElement>("button.on")?.dataset.v ?? "";
+}
+for (const sel of ["#f-model", "#f-perm"]) {
+  $(sel).addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest("button");
+    if (b) setSegment(sel, b.dataset.v ?? "");
+  });
+}
+
 function openNewDialog(prefill?: string) {
   const dlg = $<HTMLDialogElement>("#new-dialog");
   const cwd = $<HTMLInputElement>("#f-cwd");
   cwd.value = prefill ?? recentFolders()[0] ?? "";
-  $<HTMLSelectElement>("#f-model").value = lastLaunch.model;
-  $<HTMLSelectElement>("#f-perm").value = lastLaunch.permissionMode;
+  setSegment("#f-model", lastLaunch.model);
+  setSegment("#f-perm", lastLaunch.permissionMode);
   $<HTMLInputElement>("#f-continue").checked = lastLaunch.continueLast;
   $<HTMLInputElement>("#f-extra").value = lastLaunch.extra;
 
@@ -383,8 +459,8 @@ $<HTMLDialogElement>("#new-dialog").addEventListener("close", () => {
   const dlg = $<HTMLDialogElement>("#new-dialog");
   if (dlg.returnValue !== "ok") return;
   lastLaunch = {
-    model: $<HTMLSelectElement>("#f-model").value,
-    permissionMode: $<HTMLSelectElement>("#f-perm").value,
+    model: getSegment("#f-model"),
+    permissionMode: getSegment("#f-perm"),
     continueLast: $<HTMLInputElement>("#f-continue").checked,
     extra: $<HTMLInputElement>("#f-extra").value.trim(),
   };
@@ -481,9 +557,19 @@ $("#empty-open").addEventListener("click", async () => {
   if (dir) startSession({ ...lastLaunch, cwd: dir });
 });
 $("#settings-btn").addEventListener("click", openSettings);
-$("#new-btn").title = `New session (${isMac ? "⌘T" : "Ctrl+Shift+T"})`;
+$("#new-kbd").textContent = isMac ? "⌘T" : "Ctrl⇧T";
+$("#empty-new").addEventListener("click", () => openNewDialog());
+$("#tb-restart").addEventListener("click", () => active?.restart());
+$("#tb-close").addEventListener("click", () => active && closeSession(active));
+if (isMac) document.body.classList.add("mac");
+
+// Load the bundled fonts up front so xterm measures the real glyphs.
+void Promise.all(
+  ["400", "600"].map((w) => document.fonts.load(`${w} ${settings.fontSize}px "JetBrains Mono"`)),
+).catch(() => {});
 
 showEmpty();
+updateTopbar();
 void checkCli();
 
 for (const btn of document.querySelectorAll<HTMLButtonElement>("dialog .cancel")) {

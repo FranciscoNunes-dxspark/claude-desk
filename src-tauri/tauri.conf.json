@@ -18,7 +18,10 @@
         "height": 800,
         "minWidth": 640,
         "minHeight": 400,
-        "dragDropEnabled": true
+        "dragDropEnabled": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "backgroundColor": "#141413"
       }
     ],
     "security": {
