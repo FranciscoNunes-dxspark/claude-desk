@@ -19,7 +19,7 @@ The app adds a window around it:
   is typed into the prompt, which Claude Code reads as an image.
 - **Search** – ⌘F / Ctrl+Shift+F searches the terminal's scrollback.
 - **Git branch** – each session's header shows the current branch.
-- **Dark, light or system theme** – in Settings.
+- **Appearance** – dark, light or system theme; Cascadia Mono (default, 12 pt) or JetBrains Mono; compact, normal or relaxed line spacing. All in Settings.
 - **Launch options** – folder picker, recent folders, model, permission mode, any extra args
 - **Exit / restart** – a banner when Claude exits; Restart (or press Enter) to start again
 - **Drag & drop** – drop files onto a session to insert their paths; drop a folder with no session running to start one there

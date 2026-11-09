@@ -169,8 +169,23 @@
           <span class="hint">Claude Code picks its own colours too: run <code>/theme</code> in a session to match.</span>
         </div>
         <div class="field">
+          <span class="label">Terminal font</span>
+          <div class="segmented" id="s-termfont">
+            <button type="button" data-v="Cascadia Mono">Cascadia Mono</button>
+            <button type="button" data-v="JetBrains Mono">JetBrains Mono</button>
+          </div>
+        </div>
+        <div class="field">
           <span class="label">Terminal font size</span>
           <input id="s-font" type="number" min="9" max="28" />
+        </div>
+        <div class="field">
+          <span class="label">Line spacing</span>
+          <div class="segmented" id="s-line">
+            <button type="button" data-v="1">Compact</button>
+            <button type="button" data-v="1.1">Normal</button>
+            <button type="button" data-v="1.2">Relaxed</button>
+          </div>
         </div>
         <label class="toggle">
           <input type="checkbox" id="s-notify" />

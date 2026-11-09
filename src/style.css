@@ -27,7 +27,7 @@
   --shadow-float: 0 12px 32px #0009, 0 0 0 1px #0006;
   --shadow-dialog: 0 24px 64px #000c, 0 0 0 1px #0008;
   --sans: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --mono: "Cascadia Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
   color-scheme: dark;
   font-family: var(--sans);
   font-size: 13px;

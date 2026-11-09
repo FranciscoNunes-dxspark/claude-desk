@@ -2,6 +2,8 @@ import "@xterm/xterm/css/xterm.css";
 import "@fontsource-variable/inter";
 import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/600.css";
+import "@fontsource/cascadia-mono/400.css";
+import "@fontsource/cascadia-mono/600.css";
 import "./style.css";
 
 import { Terminal } from "@xterm/xterm";
@@ -23,9 +25,17 @@ import { SEARCH_DECORATIONS, TERMINAL_THEMES, type ThemeName } from "./themes";
 type ThemePref = "system" | ThemeName;
 type ConversationMode = "new" | "continue" | "resume";
 
+type TerminalFont = "Cascadia Mono" | "JetBrains Mono";
+const TERMINAL_FONTS: TerminalFont[] = ["Cascadia Mono", "JetBrains Mono"];
+const fontStack = (f: TerminalFont) => `"${f}", ui-monospace, Menlo, Consolas, monospace`;
+
 interface Settings {
   binary: string;
+  font: TerminalFont;
   fontSize: number;
+  lineHeight: number;
+  /** Settings schema version, for migrating old defaults. */
+  v?: number;
   theme: ThemePref;
   notifications: boolean;
 }
@@ -73,7 +83,20 @@ const store = {
   },
 };
 
-let settings: Settings = store.get("settings", { binary: "", fontSize: 13, theme: "dark", notifications: true });
+let settings: Settings = store.get<Settings>("settings", {
+  binary: "",
+  font: "Cascadia Mono",
+  fontSize: 12,
+  lineHeight: 1,
+  theme: "dark",
+  notifications: true,
+});
+// v1 saved the old default size (13) with every setting; move it to the new default.
+if ((settings.v ?? 1) < 2) {
+  if (settings.fontSize === 13) settings.fontSize = 12;
+  settings.v = 2;
+}
+if (!TERMINAL_FONTS.includes(settings.font)) settings.font = "Cascadia Mono";
 
 type SavedLaunch = Omit<LaunchOptions, "cwd" | "resumeId" | "resumeTitle"> & { continueLast?: boolean };
 let lastLaunch: SavedLaunch = store.get<SavedLaunch>("lastLaunch", {
@@ -247,11 +270,11 @@ class Session {
     $("#terminals").appendChild(this.el);
 
     this.term = new Terminal({
-      fontFamily: '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace',
+      fontFamily: fontStack(settings.font),
       fontSize: settings.fontSize,
       fontWeight: "400",
       fontWeightBold: "600",
-      lineHeight: 1.2,
+      lineHeight: settings.lineHeight,
       cursorStyle: "bar",
       cursorWidth: 2,
       minimumContrastRatio: 1,
@@ -912,7 +935,7 @@ function setSegment(sel: string, value: string) {
 function getSegment(sel: string): string {
   return $(sel).querySelector<HTMLButtonElement>("button.on")?.dataset.v ?? "";
 }
-for (const sel of ["#f-model", "#f-perm", "#f-conv", "#s-theme"]) {
+for (const sel of ["#f-model", "#f-perm", "#f-conv", "#s-theme", "#s-line", "#s-termfont"]) {
   $(sel).addEventListener("click", (e) => {
     const b = (e.target as HTMLElement).closest("button");
     if (!b) return;
@@ -1063,6 +1086,8 @@ function openSettings() {
   $<HTMLInputElement>("#s-font").value = String(settings.fontSize);
   $<HTMLInputElement>("#s-notify").checked = settings.notifications;
   setSegment("#s-theme", settings.theme);
+  setSegment("#s-line", String(settings.lineHeight));
+  setSegment("#s-termfont", settings.font);
   const dlg = $<HTMLDialogElement>("#settings-dialog");
   dlg.returnValue = "";
   dlg.showModal();
@@ -1073,16 +1098,26 @@ $<HTMLDialogElement>("#settings-dialog").addEventListener("close", () => {
   const font = Number($<HTMLInputElement>("#s-font").value);
   settings = {
     binary: $<HTMLInputElement>("#s-binary").value.trim(),
-    fontSize: Number.isFinite(font) && font >= 9 && font <= 28 ? font : 13,
+    font: (getSegment("#s-termfont") || "Cascadia Mono") as TerminalFont,
+    fontSize: Number.isFinite(font) && font >= 9 && font <= 28 ? font : 12,
+    lineHeight: Number(getSegment("#s-line")) || 1,
     theme: (getSegment("#s-theme") || "dark") as ThemePref,
     notifications: $<HTMLInputElement>("#s-notify").checked,
+    v: 2,
   };
   store.set("settings", settings);
   applyTheme();
-  for (const s of sessions) {
-    s.term.options.fontSize = settings.fontSize;
-    s.refit();
-  }
+  // Load the font before handing it to xterm so it measures the real glyphs.
+  void Promise.all(["400", "600"].map((w) => document.fonts.load(`${w} ${settings.fontSize}px "${settings.font}"`)))
+    .catch(() => {})
+    .then(() => {
+      for (const s of sessions) {
+        s.term.options.fontFamily = fontStack(settings.font);
+        s.term.options.fontSize = settings.fontSize;
+        s.term.options.lineHeight = settings.lineHeight;
+        s.refit();
+      }
+    });
   void checkCli();
 });
 
@@ -1169,7 +1204,7 @@ if (isMac) document.body.classList.add("mac");
 
 // Load the bundled fonts up front so xterm measures the real glyphs.
 void Promise.all(
-  ["400", "600"].map((w) => document.fonts.load(`${w} ${settings.fontSize}px "JetBrains Mono"`)),
+  ["400", "600"].map((w) => document.fonts.load(`${w} ${settings.fontSize}px "${settings.font}"`)),
 ).catch(() => {});
 
 for (const b of document.querySelectorAll<HTMLButtonElement>("#layout-switch button")) {
