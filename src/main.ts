@@ -270,8 +270,20 @@ class Session {
     this.setStatus("running");
 
     const onData = new Channel<ArrayBuffer | number[]>();
+    // Flow control: acknowledge bytes once xterm has processed them. The
+    // backend stops reading when 1 MB is unacknowledged, so a flood of output
+    // can't pile up in memory faster than it can be drawn.
+    const ACK_EVERY = 64 << 10;
+    let processed = 0;
     onData.onmessage = (chunk) => {
-      this.term.write(chunk instanceof ArrayBuffer ? new Uint8Array(chunk) : new Uint8Array(chunk));
+      const bytes = new Uint8Array(chunk);
+      this.term.write(bytes, () => {
+        processed += bytes.length;
+        if (processed >= ACK_EVERY && this.ptyId != null) {
+          void invoke("pty_ack", { id: this.ptyId, bytes: processed }).catch(() => {});
+          processed = 0;
+        }
+      });
     };
     const onExit = new Channel<{ code: number | null }>();
     onExit.onmessage = ({ code }) => this.exited(code);

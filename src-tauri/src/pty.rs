@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
@@ -12,7 +12,45 @@ use serde::Serialize;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Manager, State};
 
+/// Backpressure: the reader stops once this many bytes are sent but not yet
+/// acknowledged by the webview. Output then waits in the kernel's pty buffer
+/// and the program blocks, like in a regular terminal.
+const MAX_UNACKED: u64 = 1 << 20;
+
+#[derive(Default)]
+struct FlowState {
+    unacked: u64,
+    closed: bool,
+}
+
+#[derive(Default)]
+struct Flow {
+    state: Mutex<FlowState>,
+    cv: Condvar,
+}
+
+impl Flow {
+    /// Blocks while the webview is too far behind, then records `n` sent bytes.
+    fn before_send(&self, n: usize) {
+        let mut st = self.state.lock().unwrap();
+        while st.unacked > MAX_UNACKED && !st.closed {
+            st = self.cv.wait(st).unwrap();
+        }
+        st.unacked += n as u64;
+    }
+    fn ack(&self, n: u64) {
+        let mut st = self.state.lock().unwrap();
+        st.unacked = st.unacked.saturating_sub(n);
+        self.cv.notify_all();
+    }
+    fn close(&self) {
+        self.state.lock().unwrap().closed = true;
+        self.cv.notify_all();
+    }
+}
+
 struct Session {
+    flow: Arc<Flow>,
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
@@ -128,22 +166,25 @@ pub fn pty_spawn(
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let killer = child.clone_killer();
+    let flow = Arc::new(Flow::default());
 
     let id = state.next_id.fetch_add(1, Ordering::Relaxed) + 1;
     state
         .sessions
         .lock()
         .unwrap()
-        .insert(id, Session { master: pair.master, writer, killer });
+        .insert(id, Session { flow: flow.clone(), master: pair.master, writer, killer });
 
     // Reader: forward raw bytes (xterm.js handles UTF-8 split across chunks).
     let (done_tx, done_rx) = mpsc::channel::<()>();
+    let reader_flow = flow.clone();
     std::thread::spawn(move || {
         let mut buf = [0u8; 16 * 1024];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    reader_flow.before_send(n);
                     if on_data.send(InvokeResponseBody::Raw(buf[..n].to_vec())).is_err() {
                         break;
                     }
@@ -156,6 +197,8 @@ pub fn pty_spawn(
     // Waiter: report exit once the process ends and output has drained.
     std::thread::spawn(move || {
         let code = child.wait().ok().map(|s| s.exit_code());
+        // Never leave the reader parked waiting for acks after exit.
+        flow.close();
         // Dropping the master unblocks the reader on Windows (ConPTY).
         let session = app.state::<PtyState>().sessions.lock().unwrap().remove(&id);
         drop(session);
@@ -181,6 +224,13 @@ pub fn pty_resize(state: State<'_, PtyState>, id: u32, cols: u16, rows: u16) -> 
     s.master
         .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn pty_ack(state: State<'_, PtyState>, id: u32, bytes: u64) {
+    if let Some(s) = state.sessions.lock().unwrap().get(&id) {
+        s.flow.ack(bytes);
+    }
 }
 
 #[tauri::command]
