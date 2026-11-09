@@ -115,6 +115,19 @@ pub async fn list_conversations(cwd: String) -> Result<Vec<Conversation>, String
     .map_err(|e| e.to_string())
 }
 
+/// Whether Claude Code has saved conversation `id` for `cwd` (it only writes the
+/// file once the first message is sent).
+#[tauri::command]
+pub fn conversation_exists(cwd: String, id: String) -> bool {
+    // Only plain UUID-like ids, so `id` can't point outside the projects folder.
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return false;
+    }
+    claude_dir()
+        .map(|d| d.join("projects").join(project_key(&cwd)).join(format!("{id}.jsonl")).is_file())
+        .unwrap_or(false)
+}
+
 /// Current branch (or short commit when detached) of the repo containing `cwd`.
 /// Reads `.git/HEAD` directly, so it's cheap enough to poll.
 #[tauri::command]

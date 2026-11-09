@@ -1,62 +1,139 @@
-# Builds installers for macOS, Windows and Linux and attaches them to a draft
-# GitHub Release. Runs when you push a tag like v0.1.0, or manually from the
-# Actions tab ("Run workflow").
+# Builds Claude Desk's installers on every platform and, on main, releases them so
+# installed apps update themselves (the same scheme as Fleet's desktop window):
+#
+#   plan     picks the version: the last v… release's patch + 1, or tauri.conf.json's
+#            version when that is higher. Releases only on main, and only once the
+#            updater's private key is the TAURI_SIGNING_PRIVATE_KEY secret.
+#   bundle   builds and signs the installers for each platform.
+#   release  publishes v<version> as the latest release, with latest.json, which every
+#            installed app checks (tauri.conf.json → plugins.updater).
+#
+# Without the secret, the installers are still built and kept as the run's artifacts.
 name: Release
 
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
-
-permissions:
-  contents: write
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/**'
+      - '.github/workflows/release.yml'
 
 jobs:
-  build:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          release=false
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            if [ "$HAS_KEY" = true ]; then release=true
+            else echo "::notice::No TAURI_SIGNING_PRIVATE_KEY secret: the installers are built (see the run's artifacts) but not released for the updater."; fi
+          fi
+          version=$(gh release list --limit 100 --json tagName -q '.[].tagName' | node scripts/version.mjs)
+          echo "release=$release version=$version"
+          { echo "release=$release"; echo "version=$version"; } >> "$GITHUB_OUTPUT"
+
+  bundle:
+    needs: plan
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest # Apple Silicon
+          # 22.04 rather than the newest: an AppImage runs on systems at least as new as the one it was built on.
+          - os: ubuntu-22.04
+            name: linux-x64
+            args: ''
+          - os: windows-latest
+            name: windows-x64
+            args: ''
+          - os: macos-latest
+            name: macos-arm64
             args: --target aarch64-apple-darwin
-          - platform: macos-latest # Intel
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            name: macos-x64
             args: --target x86_64-apple-darwin
-          - platform: windows-latest
-            args: ""
-          - platform: ubuntu-22.04
-            args: ""
-    runs-on: ${{ matrix.platform }}
+            target: x86_64-apple-darwin
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ startsWith(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-
+      - name: The web view's libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+      - run: rustup default stable
+      - if: matrix.target
+        run: rustup target add ${{ matrix.target }}
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
-
+          key: ${{ matrix.name }}
       - run: npm ci
-
-      - uses: tauri-apps/tauri-action@v0
+      - name: Build the installers
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          RELEASE: ${{ needs.plan.outputs.release }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ needs.plan.outputs.release == 'true' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+        run: |
+          echo "{\"version\": \"$VERSION\"}" > src-tauri/version.json
+          configs=(--config src-tauri/version.json)
+          # A release also makes the signed files the updater installs.
+          if [ "$RELEASE" = true ]; then configs+=(--config src-tauri/tauri.release.json); else unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD; fi
+          npx tauri build ${{ matrix.args }} "${configs[@]}"
+      - uses: actions/upload-artifact@v4
         with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
-          releaseName: Claude Desk v__VERSION__
-          releaseBody: Download the installer for your platform from the assets below.
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
+          name: claude-desk-${{ matrix.name }}
+          path: |
+            src-tauri/target/**/release/bundle/deb/*.deb
+            src-tauri/target/**/release/bundle/rpm/*.rpm
+            src-tauri/target/**/release/bundle/appimage/*.AppImage*
+            src-tauri/target/**/release/bundle/msi/*.msi*
+            src-tauri/target/**/release/bundle/nsis/*.exe*
+            src-tauri/target/**/release/bundle/dmg/*.dmg
+            src-tauri/target/**/release/bundle/macos/*.app.tar.gz*
+          if-no-files-found: error
+
+  release:
+    needs: [plan, bundle]
+    if: needs.plan.outputs.release == 'true' && !cancelled()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: bundles
+      - name: Publish v<version> with latest.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          # GitHub turns spaces in asset names into dots; rename first so latest.json's URLs match.
+          find bundles -type f -name '* *' | while IFS= read -r f; do mv "$f" "$(dirname "$f")/$(basename "$f" | tr ' ' '.')"; done
+          node scripts/latest-json.mjs "$VERSION" bundles > latest.json
+          cat latest.json
+          find bundles -type f -print0 | xargs -0 gh release create "v$VERSION" latest.json \
+            --title "Claude Desk $VERSION" \
+            --notes "Installed copies of Claude Desk update themselves to this version. To install by hand, pick the file for your system below." \
+            --latest --target "$GITHUB_SHA"

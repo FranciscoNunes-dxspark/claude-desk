@@ -17,6 +17,9 @@ import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { getVersion } from "@tauri-apps/api/app";
 
 import { SEARCH_DECORATIONS, TERMINAL_THEMES, type ThemeName } from "./themes";
 
@@ -38,6 +41,8 @@ interface Settings {
   v?: number;
   theme: ThemePref;
   notifications: boolean;
+  /** Reopen last session's workspace on launch. */
+  restore: boolean;
 }
 
 interface LaunchOptions {
@@ -47,6 +52,8 @@ interface LaunchOptions {
   conversation: ConversationMode;
   resumeId?: string;
   resumeTitle?: string;
+  /** Claude Code's id for this session's conversation, so it can be reopened exactly. */
+  conversationId?: string;
   extra: string;
 }
 
@@ -90,6 +97,7 @@ let settings: Settings = store.get<Settings>("settings", {
   lineHeight: 1,
   theme: "dark",
   notifications: true,
+  restore: true,
 });
 // v1 saved the old default size (13) with every setting; move it to the new default.
 if ((settings.v ?? 1) < 2) {
@@ -137,13 +145,31 @@ function splitArgs(s: string): string[] {
   return out;
 }
 
-function buildArgs(o: LaunchOptions): string[] {
+/**
+ * Arguments for `claude`. Every session has its own conversation id: a new one
+ * is started with `--session-id <id>`; once Claude Code has saved it, restarts
+ * and restored workspaces reopen it with `--resume <id>`.
+ */
+function buildArgs(o: LaunchOptions, conversationSaved: boolean): string[] {
   const args: string[] = [];
   if (o.model) args.push("--model", o.model);
   if (o.permissionMode) args.push("--permission-mode", o.permissionMode);
-  if (o.conversation === "continue") args.push("--continue");
-  if (o.conversation === "resume" && o.resumeId) args.push("--resume", o.resumeId);
+  if (o.conversationId) args.push(conversationSaved ? "--resume" : "--session-id", o.conversationId);
+  else if (o.conversation === "continue") args.push("--continue");
+  else if (o.conversation === "resume" && o.resumeId) args.push("--resume", o.resumeId);
   return args.concat(splitArgs(o.extra));
+}
+
+/** Gives a session its conversation id the first time it starts. */
+async function assignConversation(o: LaunchOptions) {
+  if (o.conversationId) return;
+  if (o.conversation === "resume" && o.resumeId) o.conversationId = o.resumeId;
+  else if (o.conversation === "continue") {
+    const list = await invoke<Conversation[]>("list_conversations", { cwd: o.cwd }).catch(() => []);
+    o.conversationId = list[0]?.id;
+  }
+  o.conversationId ??= crypto.randomUUID();
+  saveWorkspace();
 }
 
 function shellQuote(path: string) {
@@ -513,7 +539,12 @@ class Session {
     try {
       this.ptyId = await invoke<number>("pty_spawn", {
         cwd: this.opts.cwd,
-        args: buildArgs(this.opts),
+        args: buildArgs(
+          this.opts,
+          await invoke<boolean>("conversation_exists", { cwd: this.opts.cwd, id: this.opts.conversationId }).catch(
+            () => false,
+          ),
+        ),
         binary: settings.binary || null,
         cols: this.term.cols,
         rows: this.term.rows,
@@ -755,6 +786,7 @@ function activate(s: Session, focus = true) {
   }
   if (windowFocused) s.clearAttention();
   $("#empty").hidden = true;
+  saveWorkspace();
   if (prev !== s && !$("#searchbar").hidden) moveSearchTo(s, prev);
   updateTopbar();
   if (!focus) return;
@@ -823,6 +855,7 @@ function closeSession(s: Session) {
   }
   updateAttentionBadge();
   updateTopbar();
+  saveWorkspace();
 }
 
 function startSession(opts: LaunchOptions) {
@@ -833,7 +866,38 @@ function startSession(opts: LaunchOptions) {
   activate(s);
   void refreshBranch(s);
   // Wait a frame so the terminal has its real size before spawning.
-  requestAnimationFrame(() => void s.start());
+  requestAnimationFrame(() => void assignConversation(s.opts).then(() => s.start()));
+}
+
+// ---------- workspace (reopened on launch) ----------
+
+interface Workspace {
+  sessions: LaunchOptions[];
+  active: number;
+}
+
+let restoring = false;
+
+function saveWorkspace() {
+  if (restoring) return;
+  store.set("workspace", {
+    sessions: sessions.map((s) => s.opts),
+    active: active ? sessions.indexOf(active) : 0,
+  } satisfies Workspace);
+}
+
+/** Reopens the sessions that were open last time, each continuing its own conversation. */
+function restoreWorkspace() {
+  const ws = store.get<Workspace>("workspace", { sessions: [], active: 0 });
+  if (!settings.restore || !Array.isArray(ws.sessions) || !ws.sessions.length) return;
+  restoring = true;
+  for (const opts of ws.sessions) {
+    if (opts && typeof opts.cwd === "string") startSession(opts);
+  }
+  restoring = false;
+  const target = sessions[ws.active] ?? sessions[0];
+  if (target) activate(target);
+  saveWorkspace();
 }
 
 // ---------- git branch ----------
@@ -1085,6 +1149,7 @@ function openSettings() {
   $<HTMLInputElement>("#s-binary").value = settings.binary;
   $<HTMLInputElement>("#s-font").value = String(settings.fontSize);
   $<HTMLInputElement>("#s-notify").checked = settings.notifications;
+  $<HTMLInputElement>("#s-restore").checked = settings.restore;
   setSegment("#s-theme", settings.theme);
   setSegment("#s-line", String(settings.lineHeight));
   setSegment("#s-termfont", settings.font);
@@ -1103,6 +1168,7 @@ $<HTMLDialogElement>("#settings-dialog").addEventListener("close", () => {
     lineHeight: Number(getSegment("#s-line")) || 1,
     theme: (getSegment("#s-theme") || "dark") as ThemePref,
     notifications: $<HTMLInputElement>("#s-notify").checked,
+    restore: $<HTMLInputElement>("#s-restore").checked,
     v: 2,
   };
   store.set("settings", settings);
@@ -1120,6 +1186,96 @@ $<HTMLDialogElement>("#settings-dialog").addEventListener("close", () => {
     });
   void checkCli();
 });
+
+// ---------- updates ----------
+//
+// Like Fleet: every push to main publishes a signed release, and the latest
+// release carries latest.json (see .github/workflows/release.yml). The app
+// reads it shortly after starting; if it names a newer version a toast offers
+// to install it. The download is checked against the public key in
+// tauri.conf.json before it is installed, then the app restarts on it.
+
+let pendingUpdate: Update | null = null;
+let updateDismissed = "";
+
+async function lookForUpdate(manual = false): Promise<void> {
+  const status = $("#s-version");
+  if (manual) status.textContent = "Checking…";
+  let update: Update | null = null;
+  try {
+    update = await check();
+  } catch (err) {
+    // Offline, or no release yet: the next check tries again.
+    if (manual) status.textContent = `Couldn't check for updates: ${err}`;
+    return;
+  }
+  if (!update) {
+    if (manual) status.textContent = `Claude Desk ${await getVersion()} is up to date.`;
+    return;
+  }
+  pendingUpdate = update;
+  if (manual) status.textContent = `Claude Desk ${update.version} is available.`;
+  if (manual || updateDismissed !== update.version) showUpdateToast(update);
+}
+
+function showUpdateToast(update: Update) {
+  const toastEl = $("#update-toast");
+  toastEl.querySelector(".ut-text")!.textContent =
+    `Claude Desk ${update.version} is out (you have ${update.currentVersion})`;
+  const go = toastEl.querySelector<HTMLButtonElement>(".ut-go")!;
+  go.disabled = false;
+  go.textContent = "Install and restart";
+  toastEl.hidden = false;
+}
+
+async function installUpdate() {
+  const update = pendingUpdate;
+  if (!update) return;
+  const running = sessions.filter((s) => s.running).length;
+  if (
+    running &&
+    !confirm(
+      settings.restore
+        ? `Install the update now? Your ${running} session${running === 1 ? "" : "s"} will reopen after the restart and continue where they left off.`
+        : `Restarting ends ${running} running Claude session${running === 1 ? "" : "s"}. Install the update now?`,
+    )
+  ) {
+    return;
+  }
+  const go = $("#update-toast").querySelector<HTMLButtonElement>(".ut-go")!;
+  go.disabled = true;
+  let total = 0;
+  let done = 0;
+  try {
+    await update.downloadAndInstall((ev) => {
+      if (ev.event === "Started") total = ev.data.contentLength ?? 0;
+      else if (ev.event === "Progress") {
+        done += ev.data.chunkLength;
+        go.textContent = total ? `Downloading… ${Math.round((done / total) * 100)}%` : "Downloading…";
+      } else if (ev.event === "Finished") go.textContent = "Installing…";
+    });
+    go.textContent = "Restarting…";
+    // Sessions end with the old window; the new one starts fresh.
+    for (const s of sessions) s.dispose();
+    await relaunch();
+  } catch (err) {
+    go.disabled = false;
+    go.textContent = "Try again";
+    $("#update-toast").querySelector(".ut-text")!.textContent = `Update failed: ${err}`;
+  }
+}
+
+$("#update-toast").querySelector(".ut-go")!.addEventListener("click", () => void installUpdate());
+$("#update-toast").querySelector(".ut-later")!.addEventListener("click", () => {
+  updateDismissed = pendingUpdate?.version ?? "";
+  $("#update-toast").hidden = true;
+});
+$("#s-check").addEventListener("click", () => void lookForUpdate(true));
+void getVersion().then((v) => ($("#s-version").textContent = `Claude Desk ${v}`)).catch(() => {});
+
+// Check 10 s after opening (as Fleet does), then every 6 hours for windows left open.
+setTimeout(() => void lookForUpdate(), 10_000);
+setInterval(() => void lookForUpdate(), 6 * 60 * 60 * 1000);
 
 // ---------- CLI status ----------
 
@@ -1219,4 +1375,5 @@ for (const btn of document.querySelectorAll<HTMLButtonElement>("dialog .cancel")
 applyTheme();
 showEmpty();
 applyLayout();
+restoreWorkspace();
 void checkCli();

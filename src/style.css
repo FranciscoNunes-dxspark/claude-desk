@@ -791,3 +791,42 @@ body.resizing-col .term-body, body.resizing-row .term-body { pointer-events: non
 .resume-list .sub { font-size: 11px; color: var(--text-3); }
 #f-conv-hint:empty { display: none; }
 #f-conv-hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- updates ---------- */
+
+.update-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.update-row .hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.update-row .btn { flex: none; height: 28px; }
+
+.update-toast {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100vw - 32px);
+  padding: 8px 8px 8px 10px;
+  background: var(--float-bg);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-float);
+  animation: rise-u .2s ease-out;
+}
+.update-toast[hidden] { display: none; }
+@keyframes rise-u { from { opacity: 0; transform: translateY(8px); } }
+.ut-mark {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 7px;
+  background: linear-gradient(180deg, #e3876a, #c9673f);
+}
+.ut-mark svg { width: 16px; height: 16px; fill: none; stroke: #1a1410; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.ut-text { font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.update-toast .btn { height: 28px; flex: none; }
+.update-toast .btn:disabled { opacity: .8; cursor: progress; }

@@ -38,5 +38,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMzRkJEN0ZCM0Y0NUE0MjkKUldRcHBFVS8rOWY3dzFMZ2YvVFg5NmtxZCtmem0zUlg4V1hudWNmanpjRWRhTVVSQ28zeVdxZlIK",
+      "endpoints": [
+        "https://github.com/FranciscoNunes-dxspark/claude-desk/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

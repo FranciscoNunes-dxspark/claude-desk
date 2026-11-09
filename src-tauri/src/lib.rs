@@ -6,6 +6,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(pty::PtyState::default())
         .invoke_handler(tauri::generate_handler![
             pty::pty_spawn,
@@ -15,6 +17,7 @@ pub fn run() {
             pty::pty_kill,
             pty::claude_version,
             extras::list_conversations,
+            extras::conversation_exists,
             extras::git_branch,
             extras::save_clipboard_image,
         ])

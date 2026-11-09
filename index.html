@@ -187,6 +187,18 @@
             <button type="button" data-v="1.2">Relaxed</button>
           </div>
         </div>
+        <div class="field">
+          <span class="label">Updates</span>
+          <div class="update-row">
+            <span id="s-version" class="hint"></span>
+            <button type="button" id="s-check" class="btn">Check for updates</button>
+          </div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="s-restore" />
+          <span class="switch"></span>
+          <span>Reopen my sessions when Claude Desk starts</span>
+        </label>
         <label class="toggle">
           <input type="checkbox" id="s-notify" />
           <span class="switch"></span>
@@ -198,6 +210,13 @@
         </menu>
       </form>
     </dialog>
+
+    <div id="update-toast" class="update-toast" hidden>
+      <span class="ut-mark"><svg><use href="#i-logo" /></svg></span>
+      <span class="ut-text"></span>
+      <button type="button" class="btn primary ut-go">Install and restart</button>
+      <button type="button" class="icon-btn ut-later" title="Later"><svg class="ic"><use href="#i-x" /></svg></button>
+    </div>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

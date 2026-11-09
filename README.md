@@ -20,6 +20,10 @@ The app adds a window around it:
 - **Search** – ⌘F / Ctrl+Shift+F searches the terminal's scrollback.
 - **Git branch** – each session's header shows the current branch.
 - **Appearance** – dark, light or system theme; Cascadia Mono (default, 12 pt) or JetBrains Mono; compact, normal or relaxed line spacing. All in Settings.
+- **Reopens your workspace** – sessions, layout and the active session come back when the app starts,
+  each continuing its own conversation (turn off in Settings).
+- **Updates itself** – checks shortly after starting; when a new version is out, a toast offers
+  **Install and restart**, and your sessions reopen afterwards. Settings → *Check for updates*.
 - **Launch options** – folder picker, recent folders, model, permission mode, any extra args
 - **Exit / restart** – a banner when Claude exits; Restart (or press Enter) to start again
 - **Drag & drop** – drop files onto a session to insert their paths; drop a folder with no session running to start one there
@@ -46,15 +50,32 @@ Build an installer (`.dmg` / `.msi` / `.deb` / `.AppImage`, depending on the OS)
 npm run tauri build
 ```
 
-## Installers
+## Releases and updates
 
-Pushing a tag such as `v0.1.0` (or using **Actions → Release → Run workflow**) builds installers
-for macOS (Apple Silicon and Intel), Windows and Linux. The workflow attaches them to a **draft** release
-under **Releases**; publish it when you're happy.
+Releases work like Fleet's desktop window:
 
-```bash
-git tag v0.1.0 && git push origin v0.1.0
-```
+1. **Building.** Every push to `main` that changes the app runs the Release workflow, which builds the
+   installers on macOS (Apple Silicon and Intel), Windows and Linux. *Actions → Release → Run workflow*
+   runs it by hand.
+2. **Versioning.** The version is the last `v…` release's patch plus one, or `tauri.conf.json`'s
+   version when that's higher; raise it there for a minor or major version.
+3. **Releasing.** Each run on `main` publishes `v<version>` as the latest release, with the installers,
+   their signatures, and `latest.json`, which names the newest version and the file each platform installs.
+4. **Checking.** Ten seconds after starting (and every 6 hours), the app reads
+   `releases/latest/download/latest.json` (`tauri.conf.json` → `plugins.updater`). If it names a newer
+   version, a toast says so.
+5. **Installing.** *Install and restart* downloads it, checks its signature against the public key built
+   into the app, refuses anything not signed with the matching private key, installs it and restarts.
+
+The private key is the repository secret `TAURI_SIGNING_PRIVATE_KEY` (no password). Until that secret
+exists, the workflow still builds the installers (download them from the run's *Artifacts*) but doesn't
+release them, and says so in its log. **Losing the private key means installed copies can't be updated
+any more**: they'd need reinstalling with a build that has a new key pair
+(`npx tauri signer generate`, and the new public key in `tauri.conf.json`).
+
+The app downloads updates without a GitHub login, so **the releases must be public** — as with Fleet,
+whose repository is public. On Linux, only the AppImage updates itself; `.deb`/`.rpm` installs are
+updated with the package manager.
 
 The builds aren't code-signed, so the first launch shows a warning:
 
@@ -96,6 +117,7 @@ src/main.ts            UI: tabs, dialogs, xterm.js sessions
 src/style.css
 src-tauri/src/pty.rs   PTY spawn / write / resize / kill, flow control, `claude --version`
 src-tauri/src/extras.rs  conversations, git branch, clipboard images
+scripts/                 release version and latest.json (used by the Release workflow)
 src/themes.ts          terminal colours for dark and light
 src-tauri/src/lib.rs   Tauri setup
 ```
