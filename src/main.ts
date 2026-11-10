@@ -324,6 +324,7 @@ class Session {
     } catch {
       /* canvas unavailable: keep the DOM renderer */
     }
+    this.evenCells();
     this.term.textarea?.addEventListener("focus", () => active !== this && activate(this, false));
 
     this.term.attachCustomKeyEventHandler((e) => this.handleKey(e));
@@ -373,12 +374,14 @@ class Session {
     this.tab = document.createElement("li");
     this.tab.innerHTML = `
       <span class="dot"></span>
+      <span class="initial"></span>
       <span class="meta"><span class="name"></span><span class="path"></span></span>
       <kbd></kbd>
       <button class="icon-btn close" title="Close session">${icon("x")}</button>`;
     this.tab.querySelector(".name")!.textContent = basename(opts.cwd);
+    this.tab.querySelector(".initial")!.textContent = (basename(opts.cwd).match(/[\p{L}\p{N}]/u)?.[0] ?? "•").toUpperCase();
     this.tab.querySelector(".path")!.textContent = `\u200E${opts.cwd}\u200E`;
-    this.tab.title = opts.cwd;
+    this.tab.title = `${basename(opts.cwd)} — ${opts.cwd}`;
     this.tab.addEventListener("click", () => activate(this));
     this.tab.querySelector(".close")!.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -440,6 +443,28 @@ class Session {
     }
     if (reportMissing) toast(this.el, "Nothing to paste");
     return false;
+  }
+
+  /**
+   * Keeps each character cell an even number of physical pixels wide and tall.
+   * Half-block characters (▐ ▛ ▜ ▌ ▀ ▄), which Claude's logo is made of, are drawn
+   * exactly half a cell; in an odd-sized cell that edge falls mid-pixel and is
+   * blended, leaving a visible seam where it meets a full block. Adds 1 device px of
+   * letter spacing and/or nudges the line height just enough to make both even.
+   */
+  evenCells() {
+    // xterm's internal measurements (device pixels); skip quietly if they change shape.
+    const dims = (this.term as any)._core?._renderService?.dimensions?.device;
+    const charW: number | undefined = dims?.char?.width;
+    const charH: number | undefined = dims?.char?.height;
+    if (!charW || !charH) return;
+    const base = settings.lineHeight;
+    const letterSpacing = charW % 2 ? 1 : 0;
+    const rows = Math.floor(charH * base);
+    const lineHeight = rows % 2 ? (rows + 1) / charH + 1e-6 : base;
+    if (this.term.options.letterSpacing !== letterSpacing) this.term.options.letterSpacing = letterSpacing;
+    if (this.term.options.lineHeight !== lineHeight) this.term.options.lineHeight = lineHeight;
+    this.refit();
   }
 
   refit() {
@@ -1181,7 +1206,9 @@ $<HTMLDialogElement>("#settings-dialog").addEventListener("close", () => {
         s.term.options.fontFamily = fontStack(settings.font);
         s.term.options.fontSize = settings.fontSize;
         s.term.options.lineHeight = settings.lineHeight;
-        s.refit();
+        s.term.options.letterSpacing = 0;
+        // xterm re-measures the font on the next frame; even the cells out after that.
+        requestAnimationFrame(() => requestAnimationFrame(() => s.evenCells()));
       }
     });
   void checkCli();
@@ -1299,7 +1326,7 @@ async function checkCli() {
 
 function isAppShortcut(e: KeyboardEvent): boolean {
   const mod = isMac ? e.metaKey : e.ctrlKey && e.shiftKey;
-  if (mod && ["KeyT", "KeyW", "Comma", "Backslash", "KeyF", "Enter"].includes(e.code)) return true;
+  if (mod && ["KeyT", "KeyW", "Comma", "Backslash", "KeyF", "Enter", "KeyB"].includes(e.code)) return true;
   if (e.ctrlKey && e.key === "Tab") return true;
   if (mod && /^Digit[1-9]$/.test(e.code)) return true;
   return false;
@@ -1312,6 +1339,7 @@ window.addEventListener("keydown", (e) => {
   else if (e.code === "KeyW" && active) closeSession(active);
   else if (e.code === "Comma") openSettings();
   else if (e.code === "KeyF") openSearch();
+  else if (e.code === "KeyB") toggleSidebar();
   else if (e.code === "Enter" && active) toggleZoom(active);
   else if (e.code === "Backslash") setLayout(LAYOUTS[(LAYOUTS.indexOf(layout) + 1) % LAYOUTS.length]);
   else if (e.key === "Tab" && active && sessions.length > 1) {
@@ -1359,7 +1387,7 @@ $("#tb-search").title = `Search terminal (${isMac ? "⌘F" : "Ctrl+Shift+F"})`;
 if (isMac) document.body.classList.add("mac");
 
 // Load the bundled fonts up front so xterm measures the real glyphs.
-void Promise.all(
+const fontsReady = Promise.all(
   ["400", "600"].map((w) => document.fonts.load(`${w} ${settings.fontSize}px "${settings.font}"`)),
 ).catch(() => {});
 
@@ -1372,8 +1400,42 @@ for (const btn of document.querySelectorAll<HTMLButtonElement>("dialog .cancel")
   btn.addEventListener("click", () => btn.closest("dialog")!.close("cancel"));
 }
 
+// ---------- collapsible sidebar ----------
+
+let sidebarCollapsed = store.get("ui", { sidebarCollapsed: false }).sidebarCollapsed === true;
+
+function applySidebar() {
+  document.body.classList.toggle("sidebar-collapsed", sidebarCollapsed);
+  const key = isMac ? "⌘B" : "Ctrl+Shift+B";
+  $("#sidebar-toggle").title = `${sidebarCollapsed ? "Expand" : "Collapse"} sidebar (${key})`;
+  $("#new-btn").title = sidebarCollapsed ? `New session (${isMac ? "⌘T" : "Ctrl+Shift+T"})` : "";
+}
+
+function toggleSidebar() {
+  sidebarCollapsed = !sidebarCollapsed;
+  store.set("ui", { sidebarCollapsed });
+  applySidebar();
+}
+
+$("#sidebar-toggle").addEventListener("click", toggleSidebar);
+applySidebar();
+
+// Moving the window to a screen with different scaling changes the cell sizes.
+function watchScaling() {
+  matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener(
+    "change",
+    () => {
+      requestAnimationFrame(() => sessions.forEach((s) => s.evenCells()));
+      watchScaling();
+    },
+    { once: true },
+  );
+}
+watchScaling();
+
 applyTheme();
 showEmpty();
 applyLayout();
-restoreWorkspace();
+// Restored terminals must measure the real font, so wait for it first.
+void fontsReady.then(restoreWorkspace);
 void checkCli();

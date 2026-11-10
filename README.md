@@ -91,6 +91,7 @@ The builds aren't code-signed, so the first launch shows a warning:
 | Close session | ⌘W | Ctrl+Shift+W |
 | Settings | ⌘, | Ctrl+Shift+, |
 | Search terminal | ⌘F | Ctrl+Shift+F |
+| Collapse / expand sidebar | ⌘B | Ctrl+Shift+B |
 | Maximise / restore pane | ⌘↵ | Ctrl+Shift+↵ |
 | Cycle layout (tabs → side by side → stacked → grid) | ⌘\\ | Ctrl+Shift+\\ |
 | Switch tab | Ctrl+Tab / Ctrl+Shift+Tab | same |

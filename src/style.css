@@ -830,3 +830,48 @@ body.resizing-col .term-body, body.resizing-row .term-body { pointer-events: non
 .ut-text { font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .update-toast .btn { height: 28px; flex: none; }
 .update-toast .btn:disabled { opacity: .8; cursor: progress; }
+
+/* ---------- collapsible sidebar (icon rail) ---------- */
+
+#sidebar header .icon-btn { margin-left: auto; }
+#tabs .initial { display: none; }
+
+body.sidebar-collapsed { grid-template-columns: 60px 1fr; }
+body.sidebar-collapsed #sidebar { padding: 14px 8px 10px; align-items: center; }
+body.mac.sidebar-collapsed #sidebar { padding-top: 40px; }
+/* macOS draws its window buttons over the top-left; keep the header text clear of them. */
+body.mac.sidebar-collapsed #topbar { padding-left: 30px; }
+
+body.sidebar-collapsed #sidebar header { flex-direction: column; gap: 10px; padding: 0 0 12px; }
+body.sidebar-collapsed #sidebar header .icon-btn { margin-left: 0; }
+body.sidebar-collapsed .brand,
+body.sidebar-collapsed .new-btn span,
+body.sidebar-collapsed #new-kbd,
+body.sidebar-collapsed #sidebar > .section-label,
+body.sidebar-collapsed #tabs .meta,
+body.sidebar-collapsed #tabs kbd,
+body.sidebar-collapsed #tabs .close { display: none !important; }
+
+body.sidebar-collapsed .new-btn { width: 36px; height: 36px; padding: 0; justify-content: center; margin-bottom: 12px; }
+body.sidebar-collapsed #tabs { width: 100%; align-items: center; gap: 4px; }
+body.sidebar-collapsed #tabs li { width: 40px; height: 40px; padding: 0; justify-content: center; }
+body.sidebar-collapsed #tabs li.active::before { left: -8px; }
+body.sidebar-collapsed #tabs .initial {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+body.sidebar-collapsed #tabs li.active .initial { color: var(--text); background: var(--surface-3); }
+body.sidebar-collapsed #tabs li[data-attention] .initial { color: var(--accent-hi); }
+body.sidebar-collapsed #tabs .dot { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; box-shadow: 0 0 0 2px var(--surface); }
+body.sidebar-collapsed #tabs li.active .dot { box-shadow: 0 0 0 2px var(--surface-3); }
+
+body.sidebar-collapsed #sidebar footer { flex-direction: column; gap: 8px; padding: 10px 0 0; width: 100%; }
+body.sidebar-collapsed .cli-status { font-size: 0; gap: 0; justify-content: center; }

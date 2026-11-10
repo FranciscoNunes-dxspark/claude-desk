@@ -131,9 +131,19 @@ jobs:
         run: |
           # GitHub turns spaces in asset names into dots; rename first so latest.json's URLs match.
           find bundles -type f -name '* *' | while IFS= read -r f; do mv "$f" "$(dirname "$f")/$(basename "$f" | tr ' ' '.')"; done
+          # Both Mac builds name their update archive "Claude Desk.app.tar.gz"; add the architecture.
+          for pair in macos-arm64:aarch64 macos-x64:x64; do
+            dir="bundles/claude-desk-${pair%%:*}"; arch="${pair##*:}"
+            [ -d "$dir" ] || continue
+            find "$dir" -type f -name '*.app.tar.gz*' | while IFS= read -r f; do
+              mv "$f" "$(dirname "$f")/$(basename "$f" | sed "s/\.app\.tar\.gz/_${arch}.app.tar.gz/")"
+            done
+          done
           node scripts/latest-json.mjs "$VERSION" bundles > latest.json
           cat latest.json
-          find bundles -type f -print0 | xargs -0 gh release create "v$VERSION" latest.json \
+          # Safe to re-run: create the release once, then (re)upload every file.
+          gh release view "v$VERSION" >/dev/null 2>&1 || gh release create "v$VERSION" \
             --title "Claude Desk $VERSION" \
             --notes "Installed copies of Claude Desk update themselves to this version. To install by hand, pick the file for your system below." \
             --latest --target "$GITHUB_SHA"
+          find bundles -type f -print0 | xargs -0 gh release upload "v$VERSION" latest.json --clobber
