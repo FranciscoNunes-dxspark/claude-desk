@@ -35,6 +35,9 @@ pub struct Conversation {
     title: String,
     prompts: u32,
     modified_ms: u64,
+    /// The folder the conversation ran in (from its entries).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
 }
 
 fn text_of(content: &Value) -> Option<String> {
@@ -61,7 +64,11 @@ fn prompt_text(entry: &Value) -> Option<String> {
     Some(t.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
-fn read_conversation(path: &Path) -> Option<Conversation> {
+/// Reads a conversation file: its title (custom title, summary, or first prompt), prompt
+/// count and folder. With `head`, only the first `head` bytes are read, which is enough
+/// for the title and folder and keeps listing every project's history fast (the prompt
+/// count is then only for that part).
+fn read_conversation(path: &Path, head: Option<u64>) -> Option<Conversation> {
     let id = path.file_stem()?.to_str()?.to_string();
     let modified_ms = fs::metadata(path)
         .and_then(|m| m.modified())
@@ -70,14 +77,21 @@ fn read_conversation(path: &Path) -> Option<Conversation> {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     let file = fs::File::open(path).ok()?;
-    let (mut first, mut summary, mut custom) = (None, None, None);
+    let reader: Box<dyn BufRead> = match head {
+        Some(n) => Box::new(BufReader::new(std::io::Read::take(file, n))),
+        None => Box::new(BufReader::new(file)),
+    };
+    let (mut first, mut summary, mut custom, mut cwd) = (None, None, None, None);
     let mut prompts = 0;
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
+    for line in reader.lines().map_while(Result::ok) {
         // Cheap pre-filter: most lines are large assistant/tool entries.
         if !(line.contains("\"user\"") || line.contains("\"summary\"") || line.contains("custom-title")) {
             continue;
         }
         let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+        if cwd.is_none() {
+            cwd = v.get("cwd").and_then(Value::as_str).map(String::from);
+        }
         match v.get("type").and_then(Value::as_str) {
             Some("summary") => summary = v.get("summary").and_then(Value::as_str).map(String::from),
             Some("custom-title") => custom = v.get("customTitle").and_then(Value::as_str).map(String::from),
@@ -90,7 +104,7 @@ fn read_conversation(path: &Path) -> Option<Conversation> {
         }
     }
     let title = custom.or(summary).or(first)?;
-    Some(Conversation { id, title: title.chars().take(160).collect(), prompts, modified_ms })
+    Some(Conversation { id, title: title.chars().take(160).collect(), prompts, modified_ms, cwd })
 }
 
 /// Past conversations for `cwd`, newest first.
@@ -105,11 +119,47 @@ pub async fn list_conversations(cwd: String) -> Result<Vec<Conversation>, String
             .filter_map(Result::ok)
             .map(|e| e.path())
             .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
-            .filter_map(|p| read_conversation(&p))
+            .filter_map(|p| read_conversation(&p, None))
             .collect();
         list.sort_by_key(|c| std::cmp::Reverse(c.modified_ms));
         list.truncate(50);
         list
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// The most recent conversations across every project, newest first, each with its
+/// folder. Only the start of each file is read (see `read_conversation`).
+#[tauri::command]
+pub async fn list_all_conversations(limit: Option<usize>) -> Result<Vec<Conversation>, String> {
+    let limit = limit.unwrap_or(300).min(2000);
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(projects) = claude_dir().map(|d| d.join("projects")) else { return Vec::new() };
+        let Ok(dirs) = fs::read_dir(&projects) else { return Vec::new() };
+        // Newest files first by modification time (cheap), then read just those.
+        let mut files: Vec<(u64, PathBuf)> = dirs
+            .filter_map(Result::ok)
+            .filter(|d| d.path().is_dir())
+            .flat_map(|d| fs::read_dir(d.path()).into_iter().flatten().filter_map(Result::ok))
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
+            .map(|p| {
+                let t = fs::metadata(&p)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                (t, p)
+            })
+            .collect();
+        files.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
+        files
+            .into_iter()
+            .filter_map(|(_, p)| read_conversation(&p, Some(256 * 1024)))
+            .take(limit)
+            .collect()
     })
     .await
     .map_err(|e| e.to_string())
@@ -231,5 +281,50 @@ mod tests {
         assert_eq!(prompt_text(&real).as_deref(), Some("fix the bug"));
         assert_eq!(prompt_text(&cmd), None);
         assert_eq!(prompt_text(&tool), None);
+    }
+}
+
+#[cfg(test)]
+mod perf {
+    //! Timing checks with large synthetic data. Run with:
+    //! cargo test --release perf_ -- --ignored --nocapture
+    use super::*;
+    use std::io::Write;
+    use std::time::Instant;
+
+    #[test]
+    #[ignore]
+    fn perf_history() {
+        let root = std::env::temp_dir().join("claude-desk-perf-claude");
+        let _ = fs::remove_dir_all(&root);
+        // 40 projects x 50 conversations; each ~60 user/assistant entries (~250 KB).
+        let big = "x".repeat(4000);
+        for p in 0..40 {
+            let dir = root.join("projects").join(format!("-work-project-{p}"));
+            fs::create_dir_all(&dir).unwrap();
+            for c in 0..50 {
+                let mut f = fs::File::create(dir.join(format!("{p:04}-{c:04}-conv.jsonl"))).unwrap();
+                for i in 0..60 {
+                    if i % 2 == 0 {
+                        writeln!(f, r#"{{"type":"user","cwd":"/work/project-{p}","message":{{"content":"prompt {i} for task {c}"}}}}"#).unwrap();
+                    } else {
+                        writeln!(f, r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"{big}"}}]}}}}"#).unwrap();
+                    }
+                }
+            }
+        }
+        std::env::set_var("CLAUDE_CONFIG_DIR", &root);
+        let total: u64 = fs::read_dir(root.join("projects")).unwrap()
+            .flat_map(|d| fs::read_dir(d.unwrap().path()).unwrap())
+            .map(|e| e.unwrap().metadata().unwrap().len()).sum();
+        println!("history: 2000 conversations, {} MB", total / 1_000_000);
+
+        let t = Instant::now();
+        let all = tauri::async_runtime::block_on(list_all_conversations(Some(400))).unwrap();
+        println!("list_all_conversations(400): {} results in {:?}", all.len(), t.elapsed());
+        let t = Instant::now();
+        let one = tauri::async_runtime::block_on(list_conversations("/work/project-7".into())).unwrap();
+        println!("list_conversations(one folder, 50 files): {} results in {:?}", one.len(), t.elapsed());
+        let _ = fs::remove_dir_all(&root);
     }
 }

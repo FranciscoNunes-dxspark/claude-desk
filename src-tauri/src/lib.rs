@@ -1,4 +1,5 @@
 mod extras;
+mod git;
 mod pty;
 
 pub fn run() {
@@ -17,6 +18,10 @@ pub fn run() {
             pty::pty_kill,
             pty::claude_version,
             extras::list_conversations,
+            extras::list_all_conversations,
+            git::worktree_info,
+            git::git_changes,
+            git::git_diff,
             extras::conversation_exists,
             extras::git_branch,
             extras::save_clipboard_image,

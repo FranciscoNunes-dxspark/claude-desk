@@ -10,6 +10,18 @@ The app adds a window around it:
   (switcher in the header bar, or ⌘\\ / Ctrl+Shift+\\ to cycle). Drag the dividers to resize panes
   (double-click a divider to even them out); double-click a pane's header or press ⌘↵ / Ctrl+Shift+↵ to
   maximise it.
+- **Exact session status** – each tab and pane shows *Working…*, *Needs permission*, *Has a question*,
+  *Done* or *Ready*, straight from Claude Code (its OSC 7501 status reports), with the task's title.
+- **Worktree per session** – start a session in its own git worktree and branch (Claude Code's
+  `--worktree`), so parallel sessions on one repository don't edit the same files.
+- **Changes panel** – the files the active session has changed, with +/− counts and a diff view
+  (⌘G / Ctrl+Shift+G).
+- **Broadcast** – send one prompt to several sessions at once (⌘J / Ctrl+Shift+J).
+- **Command palette** – ⌘K / Ctrl+Shift+K to jump to a session or run any command. Rename sessions and
+  give them a colour (double-click or right-click a tab); drag tabs to reorder them.
+- **Conversation history** – search and reopen conversations from every project (⌘O / Ctrl+Shift+O).
+- **Per-project defaults** – each folder remembers the model, permission mode and extra arguments you
+  last used there.
 - **Needs-attention alerts** – when a session you're not looking at finishes working (or rings the
   terminal bell / sends a notification), its tab and pane are badged and, if the window isn't focused,
   you get a desktop notification. Turn notifications off in Settings.
@@ -92,6 +104,10 @@ The builds aren't code-signed, so the first launch shows a warning:
 | Settings | ⌘, | Ctrl+Shift+, |
 | Search terminal | ⌘F | Ctrl+Shift+F |
 | Collapse / expand sidebar | ⌘B | Ctrl+Shift+B |
+| Command palette | ⌘K | Ctrl+Shift+K |
+| Changes panel | ⌘G | Ctrl+Shift+G |
+| Broadcast a prompt | ⌘J | Ctrl+Shift+J |
+| Conversation history | ⌘O | Ctrl+Shift+O |
 | Maximise / restore pane | ⌘↵ | Ctrl+Shift+↵ |
 | Cycle layout (tabs → side by side → stacked → grid) | ⌘\\ | Ctrl+Shift+\\ |
 | Switch tab | Ctrl+Tab / Ctrl+Shift+Tab | same |
@@ -117,7 +133,8 @@ If the sidebar says **CLI not found**, run `which claude` (or `where claude`) in
 src/main.ts            UI: tabs, dialogs, xterm.js sessions
 src/style.css
 src-tauri/src/pty.rs   PTY spawn / write / resize / kill, flow control, `claude --version`
-src-tauri/src/extras.rs  conversations, git branch, clipboard images
+src-tauri/src/extras.rs  conversations (per folder and across projects), git branch, clipboard images
+src-tauri/src/git.rs     worktree paths, changed files and diffs for the changes panel
 scripts/                 release version and latest.json (used by the Release workflow)
 src/themes.ts          terminal colours for dark and light
 src-tauri/src/lib.rs   Tauri setup

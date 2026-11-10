@@ -24,6 +24,9 @@
       <symbol id="i-down" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" /></symbol>
       <symbol id="i-history" viewBox="0 0 16 16"><path d="M2.8 8a5.2 5.2 0 1 0 1.5-3.7M2.5 2.5v2.8h2.8M8 5v3.2l2 1.3" /></symbol>
       <symbol id="i-sidebar" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5" /><path d="M6.5 3v10" /></symbol>
+      <symbol id="i-diff" viewBox="0 0 16 16"><path d="M4.5 2.5v6M1.5 5.5h6M8.5 12.5h6M11.5 3.5l-6 9" /></symbol>
+      <symbol id="i-broadcast" viewBox="0 0 16 16"><circle cx="8" cy="8" r="1.6" /><path d="M5.2 5.2a4 4 0 0 0 0 5.6M10.8 5.2a4 4 0 0 1 0 5.6M3.1 3.1a7 7 0 0 0 0 9.8M12.9 3.1a7 7 0 0 1 0 9.8" /></symbol>
+      <symbol id="i-command" viewBox="0 0 16 16"><path d="M6 6h4v4H6zM6 6V4.5A1.5 1.5 0 1 0 4.5 6H6M10 6V4.5A1.5 1.5 0 1 1 11.5 6H10M6 10v1.5A1.5 1.5 0 1 1 4.5 10H6M10 10v1.5a1.5 1.5 0 1 0 1.5-1.5H10" /></symbol>
       <symbol id="i-logo" viewBox="0 0 16 16"><path d="M4 5l3 3-3 3M8.5 11.5H12" /></symbol>
     </svg>
 
@@ -42,9 +45,13 @@
       <ul id="tabs"></ul>
       <footer>
         <span id="cli-status" class="cli-status">Checking CLI…</span>
-        <button id="settings-btn" class="icon-btn" title="Settings">
-          <svg class="ic"><use href="#i-gear" /></svg>
-        </button>
+        <span class="footer-btns">
+          <button id="palette-btn" class="icon-btn" title="Commands"><svg class="ic"><use href="#i-command" /></svg></button>
+          <button id="history-btn" class="icon-btn" title="Conversation history"><svg class="ic"><use href="#i-history" /></svg></button>
+          <button id="settings-btn" class="icon-btn" title="Settings">
+            <svg class="ic"><use href="#i-gear" /></svg>
+          </button>
+        </span>
       </footer>
     </aside>
 
@@ -54,9 +61,12 @@
           <span id="tb-name" class="tb-name"></span>
           <span id="tb-path" class="tb-path"></span>
           <span id="tb-branch" class="branch" hidden></span>
+          <span id="tb-state" class="state-label" hidden></span>
         </div>
         <span id="tb-split-label" class="tb-split-label"></span>
         <div id="tb-chips" class="chips-row"></div>
+        <button id="tb-broadcast" class="icon-btn" title="Broadcast a prompt"><svg class="ic"><use href="#i-broadcast" /></svg></button>
+        <button id="tb-changes" class="icon-btn" title="Changes"><svg class="ic"><use href="#i-diff" /></svg></button>
         <button id="tb-search" class="icon-btn" title="Search terminal"><svg class="ic"><use href="#i-search" /></svg></button>
         <div id="layout-switch" class="layout-switch" role="group" aria-label="Layout">
           <button data-layout="tabs" title="Tabs: one session at a time"><svg class="ic"><use href="#i-l-tabs" /></svg></button>
@@ -92,6 +102,17 @@
         </div>
       </div>
       <div id="terminals"></div>
+
+      <aside id="changes" class="changes" hidden>
+        <header>
+          <span id="ch-title" class="ch-title">Changes</span>
+          <button id="ch-refresh" class="icon-btn" title="Refresh"><svg class="ic"><use href="#i-restart" /></svg></button>
+          <button id="ch-close" class="icon-btn" title="Close"><svg class="ic"><use href="#i-x" /></svg></button>
+        </header>
+        <div id="ch-info" class="ch-info"></div>
+        <ul id="ch-files" class="ch-files"></ul>
+        <pre id="ch-diff" class="ch-diff" hidden></pre>
+      </aside>
 
       <div id="searchbar" class="searchbar" hidden>
         <svg class="ic"><use href="#i-search" /></svg>
@@ -142,9 +163,21 @@
           <span id="f-conv-hint" class="hint"></span>
           <ul id="f-resume-list" class="resume-list" hidden></ul>
         </div>
+        <div class="field" id="f-worktree-row">
+          <label class="toggle">
+            <input type="checkbox" id="f-worktree" />
+            <span class="switch"></span>
+            <span>Work in a new git worktree</span>
+          </label>
+          <div id="f-wt-name-row" hidden>
+            <input id="f-wt-name" class="mono" placeholder="worktree name" spellcheck="false" />
+          </div>
+          <span id="f-wt-hint" class="hint"></span>
+        </div>
         <div class="field">
           <span class="label">Extra arguments</span>
           <input id="f-extra" class="mono" placeholder="--add-dir ../shared --verbose" spellcheck="false" />
+          <span id="f-defaults-hint" class="hint"></span>
         </div>
         <menu>
           <button type="button" class="btn cancel">Cancel</button>
@@ -211,6 +244,62 @@
         <menu>
           <button type="button" class="btn cancel">Cancel</button>
           <button value="ok" class="btn primary">Save</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="palette-dialog" class="palette">
+      <input id="pal-q" placeholder="Type a command or a session name…" spellcheck="false" autocomplete="off" />
+      <ul id="pal-list" class="pal-list"></ul>
+    </dialog>
+
+    <dialog id="broadcast-dialog">
+      <form method="dialog" id="broadcast-form">
+        <h2>Broadcast a prompt</h2>
+        <div class="field">
+          <span class="label">Prompt</span>
+          <textarea id="bc-text" rows="4" placeholder="e.g. run the tests and summarise any failures" spellcheck="false"></textarea>
+        </div>
+        <div class="field">
+          <span class="label">Send to</span>
+          <div id="bc-sessions" class="bc-sessions"></div>
+          <span id="bc-hint" class="hint"></span>
+        </div>
+        <menu>
+          <button type="button" class="btn cancel">Cancel</button>
+          <button value="ok" class="btn primary">Send <kbd id="bc-kbd">⌘↵</kbd></button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="session-dialog">
+      <form method="dialog">
+        <h2>Session</h2>
+        <div class="field">
+          <span class="label">Name</span>
+          <input id="ss-name" spellcheck="false" />
+          <span id="ss-path" class="hint mono"></span>
+        </div>
+        <div class="field">
+          <span class="label">Colour</span>
+          <div id="ss-colors" class="swatches"></div>
+        </div>
+        <span class="hint">A new name is also passed to Claude Code (<code>--name</code>) the next time the session starts.</span>
+        <menu>
+          <button type="button" class="btn cancel">Cancel</button>
+          <button value="ok" class="btn primary">Save</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="history-dialog" class="wide">
+      <form method="dialog">
+        <h2>Conversation history</h2>
+        <input id="hist-q" placeholder="Search titles and folders…" spellcheck="false" autocomplete="off" />
+        <ul id="hist-list" class="resume-list hist-list"></ul>
+        <span id="hist-hint" class="hint"></span>
+        <menu>
+          <button type="button" class="btn cancel">Close</button>
         </menu>
       </form>
     </dialog>
