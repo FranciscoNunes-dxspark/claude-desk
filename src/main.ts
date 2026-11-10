@@ -1,10 +1,7 @@
 import "@xterm/xterm/css/xterm.css";
 import "@fontsource-variable/inter";
-import "@fontsource/jetbrains-mono/400.css";
-import "@fontsource/jetbrains-mono/600.css";
-import "@fontsource/cascadia-mono/400.css";
-import "@fontsource/cascadia-mono/600.css";
 import "./style.css";
+import { BUNDLED_FONTS, CUSTOM_FONT, DEFAULT_FONT, boldWeight, fontAvailable, fontStack } from "./fonts";
 
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -28,13 +25,13 @@ import { SEARCH_DECORATIONS, TERMINAL_THEMES, type ThemeName } from "./themes";
 type ThemePref = "system" | ThemeName;
 type ConversationMode = "new" | "continue" | "resume";
 
-type TerminalFont = "Cascadia Mono" | "JetBrains Mono";
-const TERMINAL_FONTS: TerminalFont[] = ["Cascadia Mono", "JetBrains Mono"];
-const fontStack = (f: TerminalFont) => `"${f}", ui-monospace, Menlo, Consolas, monospace`;
 
 interface Settings {
   binary: string;
-  font: TerminalFont;
+  /** A bundled font's name, or CUSTOM_FONT to use `customFont`. */
+  font: string;
+  /** Name of a font installed on this computer (when `font` is CUSTOM_FONT). */
+  customFont: string;
   /** Terminal font size in pixels. */
   fontSize: number;
   lineHeight: number;
@@ -94,6 +91,7 @@ const store = {
 let settings: Settings = store.get<Settings>("settings", {
   binary: "",
   font: "Cascadia Mono",
+  customFont: "",
   fontSize: 12,
   lineHeight: 1,
   theme: "dark",
@@ -109,7 +107,12 @@ if ((settings.v ?? 1) < 2) {
 // converted px → pt) is converted back.
 if (settings.v === 3 && settings.fontSize !== 12) settings.fontSize = Math.round((settings.fontSize * 4) / 3);
 if ((settings.v ?? 1) < 4) settings.v = 4;
-if (!TERMINAL_FONTS.includes(settings.font)) settings.font = "Cascadia Mono";
+if (settings.font !== CUSTOM_FONT && !BUNDLED_FONTS.some((f) => f.name === settings.font)) settings.font = DEFAULT_FONT;
+if (typeof settings.customFont !== "string") settings.customFont = "";
+
+/** The terminal's font family: the chosen bundled font, or the custom installed one. */
+const termFont = () =>
+  settings.font === CUSTOM_FONT ? settings.customFont.trim() || DEFAULT_FONT : settings.font;
 
 /** The terminal font size in CSS pixels. */
 const fontPx = () => settings.fontSize;
@@ -305,10 +308,10 @@ class Session {
     $("#terminals").appendChild(this.el);
 
     this.term = new Terminal({
-      fontFamily: fontStack(settings.font),
+      fontFamily: fontStack(termFont()),
       fontSize: fontPx(),
       fontWeight: "400",
-      fontWeightBold: "600",
+      fontWeightBold: boldWeight(termFont()),
       lineHeight: settings.lineHeight,
       cursorStyle: "bar",
       cursorWidth: 2,
@@ -1029,7 +1032,7 @@ function setSegment(sel: string, value: string) {
 function getSegment(sel: string): string {
   return $(sel).querySelector<HTMLButtonElement>("button.on")?.dataset.v ?? "";
 }
-for (const sel of ["#f-model", "#f-perm", "#f-conv", "#s-theme", "#s-line", "#s-termfont"]) {
+for (const sel of ["#f-model", "#f-perm", "#f-conv", "#s-theme", "#s-line"]) {
   $(sel).addEventListener("click", (e) => {
     const b = (e.target as HTMLElement).closest("button");
     if (!b) return;
@@ -1182,7 +1185,9 @@ function openSettings() {
   $<HTMLInputElement>("#s-restore").checked = settings.restore;
   setSegment("#s-theme", settings.theme);
   setSegment("#s-line", String(settings.lineHeight));
-  setSegment("#s-termfont", settings.font);
+  $<HTMLSelectElement>("#s-termfont").value = settings.font;
+  $<HTMLInputElement>("#s-customfont").value = settings.customFont;
+  updateFontFields();
   const dlg = $<HTMLDialogElement>("#settings-dialog");
   dlg.returnValue = "";
   dlg.showModal();
@@ -1193,7 +1198,8 @@ $<HTMLDialogElement>("#settings-dialog").addEventListener("close", () => {
   const font = Number($<HTMLInputElement>("#s-font").value);
   settings = {
     binary: $<HTMLInputElement>("#s-binary").value.trim(),
-    font: (getSegment("#s-termfont") || "Cascadia Mono") as TerminalFont,
+    font: $<HTMLSelectElement>("#s-termfont").value || DEFAULT_FONT,
+    customFont: $<HTMLInputElement>("#s-customfont").value.trim(),
     fontSize: Number.isFinite(font) && font >= 8 && font <= 32 ? Math.round(font * 2) / 2 : 12,
     lineHeight: Number(getSegment("#s-line")) || 1,
     theme: (getSegment("#s-theme") || "dark") as ThemePref,
@@ -1204,11 +1210,12 @@ $<HTMLDialogElement>("#settings-dialog").addEventListener("close", () => {
   store.set("settings", settings);
   applyTheme();
   // Load the font before handing it to xterm so it measures the real glyphs.
-  void Promise.all(["400", "600"].map((w) => document.fonts.load(`${w} ${fontPx()}px "${settings.font}"`)))
+  void Promise.all(["400", "600"].map((w) => document.fonts.load(`${w} ${fontPx()}px "${termFont()}"`)))
     .catch(() => {})
     .then(() => {
       for (const s of sessions) {
-        s.term.options.fontFamily = fontStack(settings.font);
+        s.term.options.fontFamily = fontStack(termFont());
+        s.term.options.fontWeightBold = boldWeight(termFont());
         s.term.options.fontSize = fontPx();
         s.term.options.lineHeight = settings.lineHeight;
         s.refit();
@@ -1307,6 +1314,45 @@ void getVersion().then((v) => ($("#s-version").textContent = `Claude Desk ${v}`)
 setTimeout(() => void lookForUpdate(), 10_000);
 setInterval(() => void lookForUpdate(), 6 * 60 * 60 * 1000);
 
+// The font picker: bundled fonts, plus "Custom…" for any font installed on this computer.
+{
+  const select = $<HTMLSelectElement>("#s-termfont");
+  for (const f of BUNDLED_FONTS) {
+    const opt = document.createElement("option");
+    opt.value = f.name;
+    opt.textContent = f.name === DEFAULT_FONT ? `${f.name} (default)` : f.name;
+    opt.style.fontFamily = fontStack(f.name);
+    select.appendChild(opt);
+  }
+  const custom = document.createElement("option");
+  custom.value = CUSTOM_FONT;
+  custom.textContent = "Custom… (a font installed on this computer)";
+  select.appendChild(custom);
+  select.addEventListener("change", updateFontFields);
+  $("#s-customfont").addEventListener("input", updateFontFields);
+}
+
+function updateFontFields() {
+  const choice = $<HTMLSelectElement>("#s-termfont").value;
+  const isCustom = choice === CUSTOM_FONT;
+  const name = $<HTMLInputElement>("#s-customfont").value.trim();
+  $("#s-customfont-row").hidden = !isCustom;
+  const family = isCustom ? name || DEFAULT_FONT : choice;
+  const preview = $("#s-fontpreview");
+  preview.style.fontFamily = fontStack(family);
+  preview.style.fontSize = `${Math.max(12, fontPx())}px`;
+  const hint = $("#s-fonthint");
+  if (isCustom && name && !fontAvailable(name)) {
+    hint.textContent = `"${name}" doesn't seem to be installed; the preview shows the fallback. Use the font's exact name, e.g. "Berkeley Mono" or "FiraCode Nerd Font Mono".`;
+    hint.classList.add("warn");
+  } else {
+    hint.textContent = isCustom
+      ? "Any monospaced font installed on this computer, by its exact name."
+      : "Ligatures (e.g. in Fira Code) aren't drawn: the terminal shows each character separately.";
+    hint.classList.remove("warn");
+  }
+}
+
 // ---------- CLI status ----------
 
 async function checkCli() {
@@ -1391,7 +1437,7 @@ if (isMac) document.body.classList.add("mac");
 
 // Load the bundled fonts up front so xterm measures the real glyphs.
 const fontsReady = Promise.all(
-  ["400", "600"].map((w) => document.fonts.load(`${w} ${fontPx()}px "${settings.font}"`)),
+  ["400", "600"].map((w) => document.fonts.load(`${w} ${fontPx()}px "${termFont()}"`)),
 ).catch(() => {});
 
 for (const b of document.querySelectorAll<HTMLButtonElement>("#layout-switch button")) {

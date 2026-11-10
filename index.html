@@ -172,10 +172,12 @@
         </div>
         <div class="field">
           <span class="label">Terminal font</span>
-          <div class="segmented" id="s-termfont">
-            <button type="button" data-v="Cascadia Mono">Cascadia Mono</button>
-            <button type="button" data-v="JetBrains Mono">JetBrains Mono</button>
+          <select id="s-termfont" class="select"></select>
+          <div id="s-customfont-row" hidden>
+            <input id="s-customfont" placeholder="Font name, e.g. Berkeley Mono" spellcheck="false" />
           </div>
+          <div id="s-fontpreview" class="font-preview">● main  ◯ general-purpose  ❯ Claude Code 0O1lI {} =&gt; ✓</div>
+          <span id="s-fonthint" class="hint"></span>
         </div>
         <div class="field">
           <span class="label">Terminal font size (px)</span>

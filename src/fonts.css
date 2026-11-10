@@ -1,0 +1,51 @@
+/* Bundled terminal fonts (Latin characters, WOFF2 only; generated from the Fontsource
+   packages). Symbols a font lacks fall back to the full Cascadia Mono in style.css. */
+
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: block;
+  src: url("../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 600; font-display: block;
+  src: url("../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Fira Code"; font-style: normal; font-weight: 400; font-display: block;
+  src: url("../node_modules/@fontsource/fira-code/files/fira-code-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Fira Code"; font-style: normal; font-weight: 600; font-display: block;
+  src: url("../node_modules/@fontsource/fira-code/files/fira-code-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Geist Mono"; font-style: normal; font-weight: 400; font-display: block;
+  src: url("../node_modules/@fontsource/geist-mono/files/geist-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Geist Mono"; font-style: normal; font-weight: 600; font-display: block;
+  src: url("../node_modules/@fontsource/geist-mono/files/geist-mono-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: block;
+  src: url("../node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 600; font-display: block;
+  src: url("../node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Source Code Pro"; font-style: normal; font-weight: 400; font-display: block;
+  src: url("../node_modules/@fontsource/source-code-pro/files/source-code-pro-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Source Code Pro"; font-style: normal; font-weight: 600; font-display: block;
+  src: url("../node_modules/@fontsource/source-code-pro/files/source-code-pro-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Iosevka"; font-style: normal; font-weight: 400; font-display: block;
+  src: url("../node_modules/@fontsource/iosevka/files/iosevka-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Iosevka"; font-style: normal; font-weight: 600; font-display: block;
+  src: url("../node_modules/@fontsource/iosevka/files/iosevka-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Commit Mono"; font-style: normal; font-weight: 400; font-display: block;
+  src: url("../node_modules/@fontsource/commit-mono/files/commit-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Commit Mono"; font-style: normal; font-weight: 600; font-display: block;
+  src: url("../node_modules/@fontsource/commit-mono/files/commit-mono-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Monaspace Neon"; font-style: normal; font-weight: 400; font-display: block;
+  src: url("../node_modules/@fontsource/monaspace-neon/files/monaspace-neon-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Monaspace Neon"; font-style: normal; font-weight: 600; font-display: block;
+  src: url("../node_modules/@fontsource/monaspace-neon/files/monaspace-neon-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Victor Mono"; font-style: normal; font-weight: 400; font-display: block;
+  src: url("../node_modules/@fontsource/victor-mono/files/victor-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Victor Mono"; font-style: normal; font-weight: 600; font-display: block;
+  src: url("../node_modules/@fontsource/victor-mono/files/victor-mono-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Maple Mono"; font-style: normal; font-weight: 400; font-display: block;
+  src: url("../node_modules/@fontsource/maple-mono/files/maple-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Maple Mono"; font-style: normal; font-weight: 600; font-display: block;
+  src: url("../node_modules/@fontsource/maple-mono/files/maple-mono-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Roboto Mono"; font-style: normal; font-weight: 400; font-display: block;
+  src: url("../node_modules/@fontsource/roboto-mono/files/roboto-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Roboto Mono"; font-style: normal; font-weight: 600; font-display: block;
+  src: url("../node_modules/@fontsource/roboto-mono/files/roboto-mono-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Ubuntu Mono"; font-style: normal; font-weight: 400; font-display: block;
+  src: url("../node_modules/@fontsource/ubuntu-mono/files/ubuntu-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Ubuntu Mono"; font-style: normal; font-weight: 700; font-display: block;
+  src: url("../node_modules/@fontsource/ubuntu-mono/files/ubuntu-mono-latin-700-normal.woff2") format("woff2"); }

@@ -1,3 +1,14 @@
+/* Microsoft's full Cascadia Mono (variable, 200-700). The npm/Google Fonts copy is trimmed
+   and lacks symbols Claude Code draws (○ ◯ ● ❯ ✓ ▶ …), which then came from a wider
+   fallback font and overflowed their cell. License: fonts/CascadiaMono-LICENSE.txt. */
+@font-face {
+  font-family: "Cascadia Mono";
+  src: url("./fonts/CascadiaMono.woff2") format("woff2");
+  font-weight: 200 700;
+  font-style: normal;
+  font-display: block;
+}
+
 :root {
   --bg: #141413;
   --surface: #1b1b19;
@@ -875,3 +886,37 @@ body.sidebar-collapsed #tabs li.active .dot { box-shadow: 0 0 0 2px var(--surfac
 
 body.sidebar-collapsed #sidebar footer { flex-direction: column; gap: 8px; padding: 10px 0 0; width: 100%; }
 body.sidebar-collapsed .cli-status { font-size: 0; gap: 0; justify-content: center; }
+
+/* ---------- font picker ---------- */
+
+dialog select.select {
+  font: inherit;
+  height: 32px;
+  width: 100%;
+  padding: 0 32px 0 10px;
+  color: var(--text);
+  background: var(--bg)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%23999' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    no-repeat right 10px center / 14px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
+  appearance: none;
+  -webkit-appearance: none;
+}
+dialog select.select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+#s-customfont-row[hidden] { display: none; }
+.font-preview {
+  padding: 9px 11px;
+  background: var(--bg);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hint.warn { color: var(--warn-text); }
+
+/* Long dialogs (Settings) scroll; keep Save / Cancel in view. */
+dialog { max-height: calc(100vh - 32px); overflow-y: auto; overscroll-behavior: contain; }
+dialog menu { position: sticky; bottom: -22px; z-index: 1; background: var(--surface); }

@@ -19,7 +19,7 @@ The app adds a window around it:
   is typed into the prompt, which Claude Code reads as an image.
 - **Search** – ⌘F / Ctrl+Shift+F searches the terminal's scrollback.
 - **Git branch** – each session's header shows the current branch.
-- **Appearance** – dark, light or system theme; Cascadia Mono (default, 12 px) or JetBrains Mono; compact, normal or relaxed line spacing. All in Settings.
+- **Appearance** – dark, light or system theme; a choice of 13 bundled coding fonts — Cascadia Mono (default, 12 px), JetBrains Mono, Fira Code, Geist Mono, IBM Plex Mono, Source Code Pro, Iosevka, Commit Mono, Monaspace Neon, Victor Mono, Maple Mono, Roboto Mono, Ubuntu Mono — or any font installed on your computer; compact, normal or relaxed line spacing. All in Settings.
 - **Reopens your workspace** – sessions, layout and the active session come back when the app starts,
   each continuing its own conversation (turn off in Settings).
 - **Updates itself** – checks shortly after starting; when a new version is out, a toast offers
