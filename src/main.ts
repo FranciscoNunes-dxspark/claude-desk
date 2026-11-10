@@ -35,6 +35,7 @@ const fontStack = (f: TerminalFont) => `"${f}", ui-monospace, Menlo, Consolas, m
 interface Settings {
   binary: string;
   font: TerminalFont;
+  /** Terminal font size in points, as in Windows Terminal (1 pt = 4/3 px). */
   fontSize: number;
   lineHeight: number;
   /** Settings schema version, for migrating old defaults. */
@@ -104,7 +105,17 @@ if ((settings.v ?? 1) < 2) {
   if (settings.fontSize === 13) settings.fontSize = 12;
   settings.v = 2;
 }
+// v2 stored the size in pixels; it's now in points, like Windows Terminal. A size of 12
+// was chosen to mean "Cascadia Mono 12", Windows Terminal's default, so it stays 12 (pt);
+// other sizes keep their look.
+if ((settings.v ?? 1) < 3) {
+  if (settings.fontSize !== 12) settings.fontSize = Math.round(settings.fontSize * 0.75 * 2) / 2;
+  settings.v = 3;
+}
 if (!TERMINAL_FONTS.includes(settings.font)) settings.font = "Cascadia Mono";
+
+/** The terminal font size in CSS pixels. */
+const fontPx = () => Math.round(((settings.fontSize * 4) / 3) * 100) / 100;
 
 type SavedLaunch = Omit<LaunchOptions, "cwd" | "resumeId" | "resumeTitle"> & { continueLast?: boolean };
 let lastLaunch: SavedLaunch = store.get<SavedLaunch>("lastLaunch", {
@@ -129,6 +140,7 @@ function pushRecent(dir: string) {
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const isMac = navigator.platform.toUpperCase().includes("MAC");
+const isWindows = navigator.platform.toUpperCase().startsWith("WIN");
 const icon = (name: string) => `<svg class="ic"><use href="#i-${name}" /></svg>`;
 
 function basename(p: string) {
@@ -297,7 +309,7 @@ class Session {
 
     this.term = new Terminal({
       fontFamily: fontStack(settings.font),
-      fontSize: settings.fontSize,
+      fontSize: fontPx(),
       fontWeight: "400",
       fontWeightBold: "600",
       lineHeight: settings.lineHeight,
@@ -406,25 +418,44 @@ class Session {
       e.preventDefault();
       return false;
     }
-    // Ctrl+Shift+C / Ctrl+Shift+V on Linux & Windows.
-    if (!isMac && e.ctrlKey && e.shiftKey && e.code === "KeyC") {
+    const plainCtrl = e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey;
+    // Copy: Ctrl+Shift+C on Linux & Windows; on Windows also plain Ctrl+C while text is
+    // selected, as in Windows Terminal (without a selection Ctrl+C still interrupts).
+    if (!isMac && e.ctrlKey && e.code === "KeyC" && (e.shiftKey || (isWindows && plainCtrl && this.term.hasSelection()))) {
       const sel = this.term.getSelection();
-      if (sel) void navigator.clipboard.writeText(sel);
+      if (sel) void this.copy(sel);
+      if (!e.shiftKey) this.term.clearSelection();
       e.preventDefault();
       return false;
     }
-    if (!isMac && e.ctrlKey && e.shiftKey && e.code === "KeyV") {
+    // Paste: Ctrl+Shift+V on Linux & Windows; on Windows also plain Ctrl+V, as in
+    // Windows Terminal. (On Linux plain Ctrl+V stays with Claude Code, which uses it to
+    // paste images itself.) An image on the clipboard is saved and its path typed.
+    if (!isMac && e.ctrlKey && e.code === "KeyV" && (e.shiftKey || (isWindows && plainCtrl))) {
       e.preventDefault();
-      void this.pasteImage(false).then(async (pasted) => {
-        if (pasted) return;
-        const text = await navigator.clipboard.readText().catch(() => "");
-        if (text) this.term.paste(text);
-      });
+      void this.pasteClipboard();
       return false;
     }
     // Let app-level shortcuts bubble instead of going to the pty.
     if (isAppShortcut(e)) return false;
     return true;
+  }
+
+  /** Pastes the clipboard: an image as a saved file's path, otherwise its text. */
+  async pasteClipboard() {
+    if (await this.pasteImage(false)) return;
+    const text = await invoke<string | null>("read_clipboard_text").catch(() => null);
+    if (text) this.term.paste(text);
+    else toast(this.el, "Nothing to paste");
+  }
+
+  async copy(text: string) {
+    try {
+      await invoke("write_clipboard_text", { text });
+    } catch {
+      await navigator.clipboard.writeText(text).catch(() => {});
+    }
+    toast(this.el, "Copied");
   }
 
   /** Saves a clipboard image to a temp file and types its path. Returns false if there was none. */
@@ -1189,22 +1220,22 @@ $<HTMLDialogElement>("#settings-dialog").addEventListener("close", () => {
   settings = {
     binary: $<HTMLInputElement>("#s-binary").value.trim(),
     font: (getSegment("#s-termfont") || "Cascadia Mono") as TerminalFont,
-    fontSize: Number.isFinite(font) && font >= 9 && font <= 28 ? font : 12,
+    fontSize: Number.isFinite(font) && font >= 6 && font <= 24 ? Math.round(font * 2) / 2 : 12,
     lineHeight: Number(getSegment("#s-line")) || 1,
     theme: (getSegment("#s-theme") || "dark") as ThemePref,
     notifications: $<HTMLInputElement>("#s-notify").checked,
     restore: $<HTMLInputElement>("#s-restore").checked,
-    v: 2,
+    v: 3,
   };
   store.set("settings", settings);
   applyTheme();
   // Load the font before handing it to xterm so it measures the real glyphs.
-  void Promise.all(["400", "600"].map((w) => document.fonts.load(`${w} ${settings.fontSize}px "${settings.font}"`)))
+  void Promise.all(["400", "600"].map((w) => document.fonts.load(`${w} ${fontPx()}px "${settings.font}"`)))
     .catch(() => {})
     .then(() => {
       for (const s of sessions) {
         s.term.options.fontFamily = fontStack(settings.font);
-        s.term.options.fontSize = settings.fontSize;
+        s.term.options.fontSize = fontPx();
         s.term.options.lineHeight = settings.lineHeight;
         s.term.options.letterSpacing = 0;
         // xterm re-measures the font on the next frame; even the cells out after that.
@@ -1388,7 +1419,7 @@ if (isMac) document.body.classList.add("mac");
 
 // Load the bundled fonts up front so xterm measures the real glyphs.
 const fontsReady = Promise.all(
-  ["400", "600"].map((w) => document.fonts.load(`${w} ${settings.fontSize}px "${settings.font}"`)),
+  ["400", "600"].map((w) => document.fonts.load(`${w} ${fontPx()}px "${settings.font}"`)),
 ).catch(() => {});
 
 for (const b of document.querySelectorAll<HTMLButtonElement>("#layout-switch button")) {

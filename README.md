@@ -19,7 +19,7 @@ The app adds a window around it:
   is typed into the prompt, which Claude Code reads as an image.
 - **Search** – ⌘F / Ctrl+Shift+F searches the terminal's scrollback.
 - **Git branch** – each session's header shows the current branch.
-- **Appearance** – dark, light or system theme; Cascadia Mono (default, 12 pt) or JetBrains Mono; compact, normal or relaxed line spacing. All in Settings.
+- **Appearance** – dark, light or system theme; Cascadia Mono (default, 12 pt — sizes are in points, as in Windows Terminal) or JetBrains Mono; compact, normal or relaxed line spacing. All in Settings.
 - **Reopens your workspace** – sessions, layout and the active session come back when the app starts,
   each continuing its own conversation (turn off in Settings).
 - **Updates itself** – checks shortly after starting; when a new version is out, a toast offers
@@ -96,7 +96,7 @@ The builds aren't code-signed, so the first launch shows a warning:
 | Cycle layout (tabs → side by side → stacked → grid) | ⌘\\ | Ctrl+Shift+\\ |
 | Switch tab | Ctrl+Tab / Ctrl+Shift+Tab | same |
 | Jump to tab N | ⌘1–9 | Ctrl+Shift+1–9 |
-| Copy / paste (text or image) | ⌘C / ⌘V | Ctrl+Shift+C / Ctrl+Shift+V |
+| Copy / paste (text or image) | ⌘C / ⌘V | Windows: Ctrl+C (with a selection) / Ctrl+V, or Ctrl+Shift+C / Ctrl+Shift+V. Linux: Ctrl+Shift+C / Ctrl+Shift+V |
 
 Plain Ctrl+T, Ctrl+C and the like go to Claude Code itself.
 

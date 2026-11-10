@@ -20,6 +20,8 @@ pub fn run() {
             extras::conversation_exists,
             extras::git_branch,
             extras::save_clipboard_image,
+            extras::read_clipboard_text,
+            extras::write_clipboard_text,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

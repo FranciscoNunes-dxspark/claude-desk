@@ -160,13 +160,41 @@ pub fn git_branch(cwd: String) -> Option<String> {
     }
 }
 
+/// One clipboard for the whole run. On Linux (X11/Wayland) the copying app has to keep
+/// serving what it copied, which arboard does only while a `Clipboard` exists; a
+/// short-lived one would lose the text as soon as it's dropped.
+fn with_clipboard<T>(f: impl FnOnce(&mut arboard::Clipboard) -> Result<T, String>) -> Result<T, String> {
+    static CLIPBOARD: std::sync::OnceLock<std::sync::Mutex<Option<arboard::Clipboard>>> = std::sync::OnceLock::new();
+    let mut slot = CLIPBOARD.get_or_init(Default::default).lock().map_err(|e| e.to_string())?;
+    if slot.is_none() {
+        *slot = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
+    }
+    f(slot.as_mut().unwrap())
+}
+
+/// Text on the system clipboard, read natively (the web view's clipboard API can be
+/// blocked or ask for permission, notably in WebView2 on Windows).
+#[tauri::command]
+pub async fn read_clipboard_text() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(|| with_clipboard(|c| Ok(c.get_text().ok().filter(|t| !t.is_empty()))))
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Puts `text` on the system clipboard.
+#[tauri::command]
+pub async fn write_clipboard_text(text: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || with_clipboard(|c| c.set_text(text).map_err(|e| e.to_string())))
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Saves the image on the clipboard as a PNG in the temp folder and returns its
 /// path, or `None` when the clipboard holds no image.
 #[tauri::command]
 pub async fn save_clipboard_image() -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-        let Ok(img) = clipboard.get_image() else { return Ok(None) };
+        let Some(img) = with_clipboard(|c| Ok(c.get_image().ok()))? else { return Ok(None) };
         let dir = std::env::temp_dir().join("claude-desk");
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let stamp = std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
