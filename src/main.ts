@@ -35,7 +35,7 @@ const fontStack = (f: TerminalFont) => `"${f}", ui-monospace, Menlo, Consolas, m
 interface Settings {
   binary: string;
   font: TerminalFont;
-  /** Terminal font size in points, as in Windows Terminal (1 pt = 4/3 px). */
+  /** Terminal font size in pixels. */
   fontSize: number;
   lineHeight: number;
   /** Settings schema version, for migrating old defaults. */
@@ -105,17 +105,14 @@ if ((settings.v ?? 1) < 2) {
   if (settings.fontSize === 13) settings.fontSize = 12;
   settings.v = 2;
 }
-// v2 stored the size in pixels; it's now in points, like Windows Terminal. A size of 12
-// was chosen to mean "Cascadia Mono 12", Windows Terminal's default, so it stays 12 (pt);
-// other sizes keep their look.
-if ((settings.v ?? 1) < 3) {
-  if (settings.fontSize !== 12) settings.fontSize = Math.round(settings.fontSize * 0.75 * 2) / 2;
-  settings.v = 3;
-}
+// Sizes are in pixels. A build that briefly stored points (v3: 12 kept as 12, others
+// converted px → pt) is converted back.
+if (settings.v === 3 && settings.fontSize !== 12) settings.fontSize = Math.round((settings.fontSize * 4) / 3);
+if ((settings.v ?? 1) < 4) settings.v = 4;
 if (!TERMINAL_FONTS.includes(settings.font)) settings.font = "Cascadia Mono";
 
 /** The terminal font size in CSS pixels. */
-const fontPx = () => Math.round(((settings.fontSize * 4) / 3) * 100) / 100;
+const fontPx = () => settings.fontSize;
 
 type SavedLaunch = Omit<LaunchOptions, "cwd" | "resumeId" | "resumeTitle"> & { continueLast?: boolean };
 let lastLaunch: SavedLaunch = store.get<SavedLaunch>("lastLaunch", {
@@ -336,7 +333,6 @@ class Session {
     } catch {
       /* canvas unavailable: keep the DOM renderer */
     }
-    this.evenCells();
     this.term.textarea?.addEventListener("focus", () => active !== this && activate(this, false));
 
     this.term.attachCustomKeyEventHandler((e) => this.handleKey(e));
@@ -474,28 +470,6 @@ class Session {
     }
     if (reportMissing) toast(this.el, "Nothing to paste");
     return false;
-  }
-
-  /**
-   * Keeps each character cell an even number of physical pixels wide and tall.
-   * Half-block characters (▐ ▛ ▜ ▌ ▀ ▄), which Claude's logo is made of, are drawn
-   * exactly half a cell; in an odd-sized cell that edge falls mid-pixel and is
-   * blended, leaving a visible seam where it meets a full block. Adds 1 device px of
-   * letter spacing and/or nudges the line height just enough to make both even.
-   */
-  evenCells() {
-    // xterm's internal measurements (device pixels); skip quietly if they change shape.
-    const dims = (this.term as any)._core?._renderService?.dimensions?.device;
-    const charW: number | undefined = dims?.char?.width;
-    const charH: number | undefined = dims?.char?.height;
-    if (!charW || !charH) return;
-    const base = settings.lineHeight;
-    const letterSpacing = charW % 2 ? 1 : 0;
-    const rows = Math.floor(charH * base);
-    const lineHeight = rows % 2 ? (rows + 1) / charH + 1e-6 : base;
-    if (this.term.options.letterSpacing !== letterSpacing) this.term.options.letterSpacing = letterSpacing;
-    if (this.term.options.lineHeight !== lineHeight) this.term.options.lineHeight = lineHeight;
-    this.refit();
   }
 
   refit() {
@@ -1220,12 +1194,12 @@ $<HTMLDialogElement>("#settings-dialog").addEventListener("close", () => {
   settings = {
     binary: $<HTMLInputElement>("#s-binary").value.trim(),
     font: (getSegment("#s-termfont") || "Cascadia Mono") as TerminalFont,
-    fontSize: Number.isFinite(font) && font >= 6 && font <= 24 ? Math.round(font * 2) / 2 : 12,
+    fontSize: Number.isFinite(font) && font >= 8 && font <= 32 ? Math.round(font * 2) / 2 : 12,
     lineHeight: Number(getSegment("#s-line")) || 1,
     theme: (getSegment("#s-theme") || "dark") as ThemePref,
     notifications: $<HTMLInputElement>("#s-notify").checked,
     restore: $<HTMLInputElement>("#s-restore").checked,
-    v: 3,
+    v: 4,
   };
   store.set("settings", settings);
   applyTheme();
@@ -1237,9 +1211,7 @@ $<HTMLDialogElement>("#settings-dialog").addEventListener("close", () => {
         s.term.options.fontFamily = fontStack(settings.font);
         s.term.options.fontSize = fontPx();
         s.term.options.lineHeight = settings.lineHeight;
-        s.term.options.letterSpacing = 0;
-        // xterm re-measures the font on the next frame; even the cells out after that.
-        requestAnimationFrame(() => requestAnimationFrame(() => s.evenCells()));
+        s.refit();
       }
     });
   void checkCli();
@@ -1450,19 +1422,6 @@ function toggleSidebar() {
 
 $("#sidebar-toggle").addEventListener("click", toggleSidebar);
 applySidebar();
-
-// Moving the window to a screen with different scaling changes the cell sizes.
-function watchScaling() {
-  matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener(
-    "change",
-    () => {
-      requestAnimationFrame(() => sessions.forEach((s) => s.evenCells()));
-      watchScaling();
-    },
-    { once: true },
-  );
-}
-watchScaling();
 
 applyTheme();
 showEmpty();
