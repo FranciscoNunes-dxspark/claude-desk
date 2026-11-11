@@ -1,6 +1,7 @@
 mod extras;
 mod git;
 mod pty;
+mod usage;
 
 pub fn run() {
     tauri::Builder::default()
@@ -16,6 +17,7 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_ack,
             pty::pty_kill,
+            pty::pty_status,
             pty::claude_version,
             extras::list_conversations,
             extras::list_all_conversations,
@@ -27,6 +29,7 @@ pub fn run() {
             extras::save_clipboard_image,
             extras::read_clipboard_text,
             extras::write_clipboard_text,
+            usage::conversation_usage,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

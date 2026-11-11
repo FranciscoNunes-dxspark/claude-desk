@@ -335,6 +335,10 @@ class Session {
   readonly tab: HTMLLIElement;
   attention = false;
   branch: string | null = null;
+  /** Token usage of this session's conversation (see `conversation_usage`). */
+  usage: Usage | null = null;
+  /** Claude Code's own live status (its status line input, see `pty_status`). */
+  status: ClaudeStatus | null = null;
   /** Claude Code's own status reports (OSC 7501), per id ("" is the main thread). */
   private program = new Map<string, ProgramEntry>();
   /** Set once Claude Code has reported status; the output heuristic is then off. */
@@ -358,6 +362,7 @@ class Session {
         <span class="pane-path"></span>
         <span class="branch" hidden></span>
         <span class="state-label" hidden></span>
+        <span class="usage" hidden></span>
         <span class="chips-row"></span>
         <button class="icon-btn" data-act="zoom" title="Maximise">${icon("max")}</button>
         <button class="icon-btn" data-act="restart" title="Restart session">${icon("restart")}</button>
@@ -470,7 +475,8 @@ class Session {
       <span class="initial"></span>
       <span class="meta"><span class="name"></span><span class="path"></span><span class="status-line" hidden></span></span>
       <kbd></kbd>
-      <button class="icon-btn close" title="Close session">${icon("x")}</button>`;
+      <button class="icon-btn close" title="Close session">${icon("x")}</button>
+      <span class="ctx-line" hidden><i></i></span>`;
     this.tab.querySelector(".path")!.textContent = `\u200E${dirOf(opts)}\u200E`;
     this.tab.addEventListener("click", () => {
       if (!tabDrag.suppressClick) activate(this);
@@ -570,10 +576,51 @@ class Session {
       this.flagAttention("finished", shown?.title);
     }
     if (prev !== next && changesOpen() && this === active) scheduleChangesRefresh(300);
+    if (prev !== next) void this.refreshStatus().then(() => this.refreshUsage());
   }
 
   get running() {
     return this.ptyId != null;
+  }
+
+  /** Reads Claude Code's live status: follows /clear and /resume to the conversation
+   *  it switched to, and picks up the context window and the plan's limits. */
+  async refreshStatus() {
+    if (this.ptyId == null) return;
+    const st = await invoke<ClaudeStatus | null>("pty_status", { id: this.ptyId }).catch(() => null);
+    if (!st || JSON.stringify(st) === JSON.stringify(this.status)) return;
+    this.status = st;
+    if (st.rate_limits) noteLimits(st.rate_limits);
+    const sid = st.session_id;
+    if (sid && /^[\w-]+$/.test(sid) && sid !== this.opts.conversationId) {
+      // Restarts and restored workspaces now reopen the conversation Claude is on.
+      this.opts.conversationId = sid;
+      this.usage = null;
+      saveWorkspace();
+    }
+    this.showUsage();
+  }
+
+  /** Reads the conversation's token usage and shows it if it changed. */
+  async refreshUsage() {
+    const id = this.opts.conversationId;
+    if (!id) return;
+    const u = await invoke<Usage | null>("conversation_usage", { cwd: dirOf(this.opts), id }).catch(() => null);
+    if (id !== this.opts.conversationId || JSON.stringify(u) === JSON.stringify(this.usage)) return;
+    this.usage = u;
+    this.showUsage();
+  }
+
+  private showUsage() {
+    renderUsage(this.el.querySelector<HTMLElement>(".usage")!, this);
+    const ctx = contextOf(this);
+    const line = this.tab.querySelector<HTMLElement>(".ctx-line")!;
+    line.hidden = !ctx;
+    if (ctx) {
+      line.dataset.level = ctx.level;
+      line.querySelector("i")!.style.width = `${ctx.pct}%`;
+    }
+    if (this === active) updateTopbar();
   }
 
   blockedKind(): string | undefined {
@@ -769,6 +816,7 @@ class Session {
     }
     this.program.clear();
     this.statusSupported = false;
+    this.status = null;
     this.updateProgramStatus();
 
     try {
@@ -1070,6 +1118,7 @@ function updateTopbar() {
   st.textContent = stateLabel(active.state, active.state === "blocked" ? active.blockedKind() : undefined);
   st.hidden = !st.textContent;
   if (active.state) st.dataset.state = active.state;
+  renderUsage($("#tb-usage"), active);
   const br = $("#tb-branch");
   br.hidden = !active.branch;
   br.innerHTML = active.branch ? `${icon("branch")}<span></span>` : "";
@@ -1143,13 +1192,148 @@ function restoreWorkspace() {
   saveWorkspace();
 }
 
+// ---------- token usage ----------
+
+interface Usage {
+  /** Tokens in the latest main-thread request: what the context holds now. */
+  context: number;
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+  requests: number;
+  model: string | null;
+}
+
+/** Claude Code's status line input (the parts used here). */
+interface ClaudeStatus {
+  session_id?: string;
+  model?: { id?: string; display_name?: string };
+  context_window?: {
+    total_input_tokens?: number;
+    context_window_size?: number;
+    used_percentage?: number | null;
+    current_usage?: unknown;
+  };
+  rate_limits?: RateLimits;
+}
+interface LimitWindow {
+  used_percentage: number;
+  resets_at: number;
+}
+interface RateLimits {
+  five_hour?: LimitWindow;
+  seven_day?: LimitWindow;
+}
+
+/** How full a session's context is: from Claude Code itself when it reports it, else
+ *  estimated from the conversation file (older Claude Code, or a status line that's
+ *  overridden by managed settings). */
+function contextOf(s: Session): { tokens: number; window: number; pct: number; level: string } | null {
+  const cw = s.status?.context_window;
+  let tokens: number;
+  let window: number;
+  let pct: number;
+  if (cw?.context_window_size) {
+    if (cw.current_usage == null) return null; // nothing sent in this conversation yet
+    tokens = cw.total_input_tokens ?? 0;
+    window = cw.context_window_size;
+    pct = cw.used_percentage ?? (tokens / window) * 100;
+  } else if (s.usage) {
+    tokens = s.usage.context;
+    // The window isn't in the file: 1M if asked for with [1m] or already past 200K.
+    const big = `${s.opts.model} ${s.opts.extra}`.toLowerCase().includes("[1m]") || tokens > 200_000;
+    window = big ? 1_000_000 : 200_000;
+    pct = (tokens / window) * 100;
+  } else return null;
+  pct = Math.max(0, Math.min(100, pct));
+  return { tokens, window, pct, level: pct >= 90 ? "full" : pct >= 70 ? "high" : "ok" };
+}
+
+function fmtTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 10_000) return `${(n / 1000).toFixed(1)}K`;
+  if (n < 1_000_000) return `${Math.round(n / 1000)}K`;
+  return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;
+}
+
+/** Fills a `.usage` element: a small context gauge, the tokens in context, and the details on hover. */
+function renderUsage(el: HTMLElement, s: Session) {
+  const ctx = contextOf(s);
+  el.hidden = !ctx;
+  if (!ctx) return;
+  const u = s.usage;
+  const n = (v: number) => v.toLocaleString();
+  el.dataset.level = ctx.level;
+  el.innerHTML = `<span class="meter"><i></i></span><span class="num"></span>`;
+  el.querySelector<HTMLElement>(".meter i")!.style.width = `${ctx.pct}%`;
+  el.querySelector(".num")!.textContent = fmtTokens(ctx.tokens);
+  const model = s.status?.model?.display_name ?? u?.model;
+  el.title = [
+    `Context: ${n(ctx.tokens)} of ${fmtTokens(ctx.window)} tokens (${Math.round(ctx.pct)}%)`,
+    u ? `This conversation: ${n(u.input + u.cacheRead + u.cacheWrite)} input tokens (${n(u.cacheRead)} read from cache), ${n(u.output)} output` : "",
+    [u ? `${u.requests} request${u.requests === 1 ? "" : "s"}` : "", model].filter(Boolean).join(" · "),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+// ---------- plan usage limits ----------
+// Claude Code reports the subscription's 5-hour and weekly usage to its status line;
+// they're the account's, so the sidebar shows the latest any session reported.
+
+let limits: RateLimits | null = null;
+
+function noteLimits(l: RateLimits) {
+  limits = l;
+  renderLimits();
+}
+
+function renderLimits() {
+  const el = $("#limits");
+  const now = Date.now() / 1000;
+  const windows: [string, LimitWindow][] = [];
+  for (const [label, w] of [["5-hour", limits?.five_hour], ["Weekly", limits?.seven_day]] as const) {
+    if (w && w.resets_at > now) windows.push([label, w]);
+  }
+  el.hidden = !windows.length;
+  el.replaceChildren(
+    ...windows.map(([label, w]) => {
+      const pct = Math.max(0, Math.min(100, w.used_percentage));
+      const row = document.createElement("div");
+      row.className = "limit";
+      row.dataset.level = pct >= 90 ? "full" : pct >= 70 ? "high" : "ok";
+      row.innerHTML = `<span class="l-name"></span><span class="meter"><i></i></span><span class="l-pct"></span>`;
+      row.querySelector(".l-name")!.textContent = label;
+      row.querySelector<HTMLElement>(".meter i")!.style.width = `${pct}%`;
+      row.querySelector(".l-pct")!.textContent = `${Math.round(pct)}%`;
+      const reset = new Date(w.resets_at * 1000);
+      const when = reset.toDateString() === new Date().toDateString()
+        ? reset.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+        : reset.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
+      row.title = `${label} plan usage limit: ${Math.round(pct)}% used · resets ${when}`;
+      return row;
+    }),
+  );
+}
+setInterval(renderLimits, 60_000); // drop a window once it has reset
+
+// Cheap to poll: a small status file, and only what Claude Code appended to the
+// conversation since the last read.
+setInterval(() => {
+  if (document.hidden) return;
+  for (const s of sessions) if (s.running) void s.refreshStatus().then(() => s.refreshUsage());
+}, 2000);
+
 // ---------- git branch ----------
 
 async function refreshBranch(s: Session) {
   const b = await invoke<string | null>("git_branch", { cwd: dirOf(s.opts) }).catch(() => null);
   s.setBranch(b);
 }
-setInterval(() => sessions.forEach((s) => void refreshBranch(s)), 4000);
+// Polled while the window is visible; catches up as soon as it's shown again.
+setInterval(() => !document.hidden && sessions.forEach((s) => void refreshBranch(s)), 4000);
+document.addEventListener("visibilitychange", () => !document.hidden && sessions.forEach((s) => void refreshBranch(s)));
 
 // ---------- search ----------
 
@@ -1682,6 +1866,10 @@ interface GitChange {
 
 let changesFor: Session | null = null;
 let changesSelected: string | null = null;
+/** What the list and diff currently show, so unchanged refreshes skip rebuilding the DOM
+ *  (re-rendering a large diff takes a few hundred ms on the UI thread). */
+let changesShown = "";
+let diffShown = "";
 let changesTimer = 0;
 let changesBusy = false;
 /** How long the last `git status` took; refreshes back off on big repositories. */
@@ -1720,6 +1908,8 @@ async function refreshChanges(reset: boolean) {
   if (reset || changesFor !== s) {
     changesFor = s;
     changesSelected = null;
+    changesShown = "";
+    diffShown = "";
     $("#ch-diff").textContent = "";
     $("#ch-diff").hidden = true;
   }
@@ -1734,29 +1924,34 @@ async function refreshChanges(reset: boolean) {
     info.textContent = res.files.length
       ? `${res.files.length} file${res.files.length === 1 ? "" : "s"} changed${res.branch ? ` on ${res.branch}` : ""}`
       : `No changes${res.branch ? ` on ${res.branch}` : ""}`;
-    const frag = document.createDocumentFragment();
-    for (const f of res.files) {
-      const code = f.status === "??" ? "?" : (f.status.trim()[0] ?? "M");
-      const li = document.createElement("li");
-      li.className = f.path === changesSelected ? "on" : "";
-      li.innerHTML = `<span class="st st-${code === "?" ? "new" : code}"></span><span class="file"><span class="fname"></span><span class="fdir"></span></span><span class="nums"></span>`;
-      li.querySelector(".st")!.textContent = code === "?" ? "U" : code;
-      (li.querySelector(".st") as HTMLElement).title = STATUS_NAMES[code] ?? f.status;
-      const slash = f.path.lastIndexOf("/");
-      li.querySelector(".fname")!.textContent = f.path.slice(slash + 1);
-      li.querySelector(".fdir")!.textContent = slash > 0 ? f.path.slice(0, slash) : "";
-      li.querySelector(".nums")!.innerHTML = f.binary
-        ? `<span class="bin">binary</span>`
-        : `<span class="add">+${f.added ?? 0}</span><span class="del">−${f.removed ?? 0}</span>`;
-      li.title = f.path;
-      li.addEventListener("click", () => {
-        changesSelected = f.path;
-        list.querySelectorAll("li").forEach((x) => x.classList.toggle("on", x === li));
-        void showDiff(s, f);
-      });
-      frag.appendChild(li);
+    const shown = JSON.stringify(res.files);
+    const listChanged = shown !== changesShown;
+    changesShown = shown;
+    if (listChanged) {
+      const frag = document.createDocumentFragment();
+      for (const f of res.files) {
+        const code = f.status === "??" ? "?" : (f.status.trim()[0] ?? "M");
+        const li = document.createElement("li");
+        li.className = f.path === changesSelected ? "on" : "";
+        li.innerHTML = `<span class="st st-${code === "?" ? "new" : code}"></span><span class="file"><span class="fname"></span><span class="fdir"></span></span><span class="nums"></span>`;
+        li.querySelector(".st")!.textContent = code === "?" ? "U" : code;
+        (li.querySelector(".st") as HTMLElement).title = STATUS_NAMES[code] ?? f.status;
+        const slash = f.path.lastIndexOf("/");
+        li.querySelector(".fname")!.textContent = f.path.slice(slash + 1);
+        li.querySelector(".fdir")!.textContent = slash > 0 ? f.path.slice(0, slash) : "";
+        li.querySelector(".nums")!.innerHTML = f.binary
+          ? `<span class="bin">binary</span>`
+          : `<span class="add">+${f.added ?? 0}</span><span class="del">−${f.removed ?? 0}</span>`;
+        li.title = f.path;
+        li.addEventListener("click", () => {
+          changesSelected = f.path;
+          list.querySelectorAll("li").forEach((x) => x.classList.toggle("on", x === li));
+          void showDiff(s, f);
+        });
+        frag.appendChild(li);
+      }
+      list.replaceChildren(frag);
     }
-    list.replaceChildren(frag);
     if (changesSelected) {
       const f = res.files.find((x) => x.path === changesSelected);
       if (f) void showDiff(s, f);
@@ -1768,6 +1963,7 @@ async function refreshChanges(reset: boolean) {
   } catch (err) {
     if (changesFor === s) {
       list.innerHTML = "";
+      changesShown = "";
       const msg = String(err);
       info.textContent = /not a git repository/i.test(msg) ? "This folder isn't a git repository." : msg;
     }
@@ -1783,6 +1979,9 @@ async function showDiff(s: Session, f: GitChange) {
     (e) => `Couldn't load the diff: ${e}`,
   );
   if (changesFor !== s || changesSelected !== f.path) return;
+  const key = `${f.path}\0${text}`;
+  if (key === diffShown) return; // unchanged since the last refresh
+  diffShown = key;
   const frag = document.createDocumentFragment();
   for (const line of text.split("\n")) {
     const div = document.createElement("div");
