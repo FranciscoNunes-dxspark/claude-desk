@@ -11,7 +11,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -225,6 +225,19 @@ function timeAgo(ms: number) {
   return new Date(ms).toLocaleDateString();
 }
 
+/**
+ * Asks before something destructive. (The web view's `confirm()` is replaced by the
+ * dialog plugin with an async version, so it can't be used as a yes/no answer.)
+ * If the dialog can't be shown, goes ahead rather than leaving the action stuck.
+ */
+async function askToConfirm(message: string, okLabel: string): Promise<boolean> {
+  try {
+    return await ask(message, { title: "Claude Desk", kind: "warning", okLabel, cancelLabel: "Cancel" });
+  } catch {
+    return true;
+  }
+}
+
 function toast(where: HTMLElement, message: string) {
   const t = document.createElement("div");
   t.className = "toast";
@@ -346,6 +359,7 @@ class Session {
   state: ProgramState | null = null;
   private ptyId: number | null = null;
   private restartPending = false;
+  private disposed = false;
   private banner: HTMLDivElement | null = null;
   private resizeObs: ResizeObserver;
   private burstStart = 0;
@@ -853,6 +867,7 @@ class Session {
 
   private exited(code: number | null) {
     this.ptyId = null;
+    if (this.disposed) return; // closed on purpose: no banner, no "session ended" alert
     if (this.restartPending) {
       this.restartPending = false;
       this.term.reset();
@@ -882,11 +897,17 @@ class Session {
   }
 
   dispose() {
+    this.disposed = true;
     if (this.ptyId != null) void invoke("pty_kill", { id: this.ptyId }).catch(() => {});
-    this.resizeObs.disconnect();
-    this.term.dispose();
+    // Off screen first, so the session is gone even if tearing the terminal down fails.
     this.el.remove();
     this.tab.remove();
+    this.resizeObs.disconnect();
+    try {
+      this.term.dispose();
+    } catch (err) {
+      console.error("disposing terminal:", err);
+    }
   }
 }
 
@@ -1073,7 +1094,7 @@ function activate(s: Session, focus = true) {
   if (windowFocused) s.clearAttention();
   $("#empty").hidden = true;
   saveWorkspace();
-  if (prev !== s && !$("#searchbar").hidden) moveSearchTo(s, prev);
+  if (prev !== s && !searchBar.hidden) moveSearchTo(s, prev);
   if (prev !== s && changesOpen()) scheduleChangesRefresh();
   updateTopbar();
   if (!focus) return;
@@ -1129,12 +1150,27 @@ function updateTopbar() {
     : `${sessions.length} sessions · ${LAYOUT_NAMES[layout]}`;
 }
 
-function closeSession(s: Session) {
-  if (s.running && !confirm(`End the Claude session "${displayName(s.opts)}"?`)) return;
+/** Sessions waiting on "End the session?", so a second click doesn't ask twice. */
+const closing = new Set<Session>();
+
+async function closeSession(s: Session) {
+  if (closing.has(s) || !sessions.includes(s)) return;
+  if (s.running) {
+    closing.add(s);
+    const ok = await askToConfirm(`End the Claude session "${displayName(s.opts)}"?`, "End session");
+    closing.delete(s);
+    // Closed meanwhile (e.g. from its banner after it exited)?
+    if (!ok || !sessions.includes(s)) return;
+  }
   const i = sessions.indexOf(s);
   sessions.splice(i, 1);
   if (zoomed === s) zoomed = null;
-  if (!$("#searchbar").hidden && active === s) closeSearch();
+  if (!searchBar.hidden && active === s) closeSearch();
+  // The search bar moves into the pane it searches; take it back before the pane goes.
+  if (s.el.contains(searchBar)) {
+    searchBar.hidden = true;
+    searchHome.appendChild(searchBar);
+  }
   s.dispose();
   applyLayout();
   if (active === s) {
@@ -1338,10 +1374,13 @@ document.addEventListener("visibilitychange", () => !document.hidden && sessions
 // ---------- search ----------
 
 const searchInput = $<HTMLInputElement>("#search-input");
+const searchBar = $("#searchbar");
+/** Where the search bar lives while no pane holds it. */
+const searchHome = searchBar.parentElement!;
 
 function openSearch() {
   if (!active) return;
-  const bar = $("#searchbar");
+  const bar = searchBar;
   active.el.appendChild(bar);
   bar.hidden = false;
   const sel = active.term.getSelection();
@@ -1352,7 +1391,7 @@ function openSearch() {
 }
 
 function closeSearch() {
-  $("#searchbar").hidden = true;
+  searchBar.hidden = true;
   $("#search-count").textContent = "";
   active?.search.clearDecorations();
   active?.term.clearSelection();
@@ -1361,7 +1400,7 @@ function closeSearch() {
 
 function moveSearchTo(s: Session, prev: Session | null) {
   prev?.search.clearDecorations();
-  s.el.appendChild($("#searchbar"));
+  s.el.appendChild(searchBar);
   runSearch(true, true);
 }
 
@@ -1720,11 +1759,12 @@ async function installUpdate() {
   const running = sessions.filter((s) => s.running).length;
   if (
     running &&
-    !confirm(
+    !(await askToConfirm(
       settings.restore
         ? `Install the update now? Your ${running} session${running === 1 ? "" : "s"} will reopen after the restart and continue where they left off.`
         : `Restarting ends ${running} running Claude session${running === 1 ? "" : "s"}. Install the update now?`,
-    )
+      "Install and restart",
+    ))
   ) {
     return;
   }

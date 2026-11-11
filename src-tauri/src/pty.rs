@@ -58,6 +58,30 @@ struct Session {
     /// isn't reading, so it never happens on the command (main) thread or under `sessions`.
     input: mpsc::Sender<Vec<u8>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
+    pid: Option<u32>,
+}
+
+impl Session {
+    /// Ends the program and everything it started. On Windows Claude runs under
+    /// `cmd.exe /C`, and terminating cmd.exe alone would leave Claude running.
+    fn kill(&mut self) -> std::io::Result<()> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            if let Some(pid) = self.pid {
+                // Not waited for: this runs on the main thread.
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = self.pid;
+        self.killer.kill()
+    }
 }
 
 #[derive(Default)]
@@ -70,7 +94,7 @@ impl Drop for PtyState {
     fn drop(&mut self) {
         if let Ok(mut sessions) = self.sessions.lock() {
             for (_, mut s) in sessions.drain() {
-                let _ = s.killer.kill();
+                let _ = s.kill();
             }
         }
     }
@@ -240,6 +264,7 @@ pub fn pty_spawn(
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let input = spawn_writer(pair.master.take_writer().map_err(|e| e.to_string())?);
     let killer = child.clone_killer();
+    let pid = child.process_id();
     let flow = Arc::new(Flow::default());
 
     let status = settings_file.as_ref().map(|_| status_file.clone());
@@ -247,7 +272,7 @@ pub fn pty_spawn(
         .sessions
         .lock()
         .unwrap()
-        .insert(id, Session { flow: flow.clone(), status, master: pair.master, input, killer });
+        .insert(id, Session { flow: flow.clone(), status, master: pair.master, input, killer, pid });
 
     // Reader: forward raw bytes (xterm.js handles UTF-8 split across chunks).
     let (done_tx, done_rx) = mpsc::channel::<()>();
@@ -329,7 +354,7 @@ pub async fn pty_status(state: State<'_, PtyState>, id: u32) -> Result<Option<se
 pub fn pty_kill(state: State<'_, PtyState>, id: u32) -> Result<(), String> {
     let mut sessions = state.sessions.lock().unwrap();
     if let Some(s) = sessions.get_mut(&id) {
-        s.killer.kill().map_err(|e| e.to_string())?;
+        s.kill().map_err(|e| e.to_string())?;
     }
     Ok(())
 }
