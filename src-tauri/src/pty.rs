@@ -316,7 +316,7 @@ pub fn pty_spawn(
 
     let id = state.next_id.fetch_add(1, Ordering::Relaxed) + 1;
     // Claude Code's live status, unless the user passes settings of their own.
-    let dir = std::env::temp_dir().join("claude-desk");
+    let dir = std::env::temp_dir().join("switchyard");
     let status_file = dir.join(format!("status-{}-{id}.json", std::process::id()));
     let settings_file = (!args.iter().any(|a| a == "--settings"))
         .then(|| std::fs::create_dir_all(&dir).ok())
@@ -334,7 +334,7 @@ pub fn pty_spawn(
     cmd.env("PATH", augmented_path());
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
-    cmd.env("TERM_PROGRAM", "ClaudeDesk");
+    cmd.env("TERM_PROGRAM", "Switchyard");
     cmd.env("CLAUDE_DESK_STATUS", &status_file);
 
     let mut child = pair

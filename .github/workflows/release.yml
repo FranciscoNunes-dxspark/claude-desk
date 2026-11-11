@@ -1,4 +1,4 @@
-# Builds Claude Desk's installers on every platform and, on main, releases them so
+# Builds Switchyard's installers on every platform and, on main, releases them so
 # installed apps update themselves (the same scheme as Fleet's desktop window):
 #
 #   plan     picks the version: the last v… release's patch + 1, or tauri.conf.json's
@@ -101,7 +101,7 @@ jobs:
           npx tauri build ${{ matrix.args }} "${configs[@]}"
       - uses: actions/upload-artifact@v4
         with:
-          name: claude-desk-${{ matrix.name }}
+          name: switchyard-${{ matrix.name }}
           path: |
             src-tauri/target/**/release/bundle/deb/*.deb
             src-tauri/target/**/release/bundle/rpm/*.rpm
@@ -131,9 +131,9 @@ jobs:
         run: |
           # GitHub turns spaces in asset names into dots; rename first so latest.json's URLs match.
           find bundles -type f -name '* *' | while IFS= read -r f; do mv "$f" "$(dirname "$f")/$(basename "$f" | tr ' ' '.')"; done
-          # Both Mac builds name their update archive "Claude Desk.app.tar.gz"; add the architecture.
+          # Both Mac builds name their update archive "Switchyard.app.tar.gz"; add the architecture.
           for pair in macos-arm64:aarch64 macos-x64:x64; do
-            dir="bundles/claude-desk-${pair%%:*}"; arch="${pair##*:}"
+            dir="bundles/switchyard-${pair%%:*}"; arch="${pair##*:}"
             [ -d "$dir" ] || continue
             find "$dir" -type f -name '*.app.tar.gz*' | while IFS= read -r f; do
               mv "$f" "$(dirname "$f")/$(basename "$f" | sed "s/\.app\.tar\.gz/_${arch}.app.tar.gz/")"
@@ -143,7 +143,7 @@ jobs:
           cat latest.json
           # Safe to re-run: create the release once, then (re)upload every file.
           gh release view "v$VERSION" >/dev/null 2>&1 || gh release create "v$VERSION" \
-            --title "Claude Desk $VERSION" \
-            --notes "Installed copies of Claude Desk update themselves to this version. To install by hand, pick the file for your system below." \
+            --title "Switchyard $VERSION" \
+            --notes "Installed copies of Switchyard (formerly Claude Desk) update themselves to this version. To install by hand, pick the file for your system below." \
             --latest --target "$GITHUB_SHA"
           find bundles -type f -print0 | xargs -0 gh release upload "v$VERSION" latest.json --clobber

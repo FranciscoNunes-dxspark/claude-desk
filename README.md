@@ -1,6 +1,7 @@
-# Claude Desk
+# Switchyard
 
-A small desktop wrapper for the [Claude Code](https://docs.claude.com/en/docs/claude-code) CLI, built with Tauri 2.
+A workspace for running [Claude Code](https://docs.claude.com/en/docs/claude-code) sessions side by side,
+built with Tauri 2. (Formerly Claude Desk.)
 
 It runs the real `claude` binary in a pseudo-terminal (via `portable-pty`) and renders it with xterm.js.
 Every Claude Code feature — slash commands, permission prompts, plan mode, MCP, hooks — works the same as in your terminal.
@@ -78,6 +79,12 @@ state; each one fails on the code before its fix.
 
 ## Releases and updates
 
+**Renamed from Claude Desk.** Installed copies of Claude Desk update to Switchyard like to any
+other release. The app's identifier is still `com.dxspark.claudedesk`, so settings, open sessions
+and history carry over. On Windows the installer keys an install by its name, so Switchyard's
+installer then removes the old Claude Desk folder, shortcuts and uninstall entry
+(`src-tauri/windows/hooks.nsh`); a pinned taskbar shortcut may need pinning again.
+
 Releases work like Fleet's desktop window:
 
 1. **Building.** Every push to `main` that changes the app runs the Release workflow, which builds the
@@ -106,7 +113,7 @@ updated with the package manager.
 The builds aren't code-signed, so the first launch shows a warning:
 
 - **macOS:** right-click the app → **Open** → **Open**. If it says the app is "damaged", run
-  `xattr -cr "/Applications/Claude Desk.app"`.
+  `xattr -cr "/Applications/Switchyard.app"`.
 - **Windows:** SmartScreen → **More info** → **Run anyway**.
 
 ## Shortcuts

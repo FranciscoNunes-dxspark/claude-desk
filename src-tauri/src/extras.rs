@@ -242,7 +242,7 @@ pub async fn write_clipboard_text(text: String) -> Result<(), String> {
 pub async fn save_clipboard_image() -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let Some(img) = with_clipboard(|c| Ok(c.get_image().ok()))? else { return Ok(None) };
-        let dir = std::env::temp_dir().join("claude-desk");
+        let dir = std::env::temp_dir().join("switchyard");
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let stamp = std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
         let path = dir.join(format!("pasted-{stamp}.png"));

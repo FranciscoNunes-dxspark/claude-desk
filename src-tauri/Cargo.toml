@@ -1,7 +1,9 @@
 [package]
+# The binary keeps its original name: the Windows installer recognises a running copy
+# by it when updating. (The app's name, Switchyard, is tauri.conf.json's productName.)
 name = "claude-desk"
 version = "0.2.3"
-description = "Desktop wrapper for the Claude Code CLI"
+description = "Switchyard: a workspace for running Claude Code sessions side by side"
 edition = "2021"
 
 [lib]

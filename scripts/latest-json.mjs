@@ -1,7 +1,7 @@
 // Writes latest.json, the file the app's updater reads (Tauri's format): the
 // version and, per platform, the file to install from release v<version> and its
 // signature. Bundles are the release job's downloaded artifacts, one folder per
-// build (claude-desk-<platform>):
+// build (switchyard-<platform>):
 //   node scripts/latest-json.mjs <version> <bundles folder> > latest.json
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -19,10 +19,10 @@ const filesIn = (dir) =>
 // Which artifact and file each platform updates from: the bundles the updater can
 // install by itself (AppImage, NSIS setup, macOS app archive).
 const PLATFORMS = {
-  "linux-x86_64": ["claude-desk-linux-x64", (f) => f.endsWith(".AppImage")],
-  "windows-x86_64": ["claude-desk-windows-x64", (f) => /-setup\.exe$/.test(f)],
-  "darwin-aarch64": ["claude-desk-macos-arm64", (f) => f.endsWith(".app.tar.gz")],
-  "darwin-x86_64": ["claude-desk-macos-x64", (f) => f.endsWith(".app.tar.gz")],
+  "linux-x86_64": ["switchyard-linux-x64", (f) => f.endsWith(".AppImage")],
+  "windows-x86_64": ["switchyard-windows-x64", (f) => /-setup\.exe$/.test(f)],
+  "darwin-aarch64": ["switchyard-macos-arm64", (f) => f.endsWith(".app.tar.gz")],
+  "darwin-x86_64": ["switchyard-macos-x64", (f) => f.endsWith(".app.tar.gz")],
 };
 
 const platforms = {};
@@ -43,5 +43,5 @@ for (const [platform, [artifact, matches]] of Object.entries(PLATFORMS)) {
 if (!Object.keys(platforms).length) throw new Error(`No signed bundles under ${folder}.`);
 
 console.log(
-  JSON.stringify({ version, notes: `Claude Desk ${version}`, pub_date: new Date().toISOString(), platforms }, null, 2),
+  JSON.stringify({ version, notes: `Switchyard ${version}`, pub_date: new Date().toISOString(), platforms }, null, 2),
 );

@@ -232,7 +232,7 @@ function timeAgo(ms: number) {
  */
 async function askToConfirm(message: string, okLabel: string): Promise<boolean> {
   try {
-    return await ask(message, { title: "Claude Desk", kind: "warning", okLabel, cancelLabel: "Cancel" });
+    return await ask(message, { title: "Switchyard", kind: "warning", okLabel, cancelLabel: "Cancel" });
   } catch {
     return true;
   }
@@ -1836,18 +1836,18 @@ async function lookForUpdate(manual = false): Promise<void> {
     return;
   }
   if (!update) {
-    if (manual) status.textContent = `Claude Desk ${await getVersion()} is up to date.`;
+    if (manual) status.textContent = `Switchyard ${await getVersion()} is up to date.`;
     return;
   }
   pendingUpdate = update;
-  if (manual) status.textContent = `Claude Desk ${update.version} is available.`;
+  if (manual) status.textContent = `Switchyard ${update.version} is available.`;
   if (manual || updateDismissed !== update.version) showUpdateToast(update);
 }
 
 function showUpdateToast(update: Update) {
   const toastEl = $("#update-toast");
   toastEl.querySelector(".ut-text")!.textContent =
-    `Claude Desk ${update.version} is out (you have ${update.currentVersion})`;
+    `Switchyard ${update.version} is out (you have ${update.currentVersion})`;
   const go = toastEl.querySelector<HTMLButtonElement>(".ut-go")!;
   go.disabled = false;
   go.textContent = "Install and restart";
@@ -1898,7 +1898,7 @@ $("#update-toast").querySelector(".ut-later")!.addEventListener("click", () => {
   $("#update-toast").hidden = true;
 });
 $("#s-check").addEventListener("click", () => void lookForUpdate(true));
-void getVersion().then((v) => ($("#s-version").textContent = `Claude Desk ${v}`)).catch(() => {});
+void getVersion().then((v) => ($("#s-version").textContent = `Switchyard ${v}`)).catch(() => {});
 
 // Check 10 s after opening (as Fleet does), then every 6 hours for windows left open.
 setTimeout(() => void lookForUpdate(), 10_000);
