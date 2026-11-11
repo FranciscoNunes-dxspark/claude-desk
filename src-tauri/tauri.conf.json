@@ -21,7 +21,7 @@
         "dragDropEnabled": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "backgroundColor": "#141413"
+        "backgroundColor": "#12151a"
       }
     ],
     "security": {
