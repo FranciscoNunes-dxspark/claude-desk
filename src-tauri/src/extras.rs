@@ -64,18 +64,22 @@ fn prompt_text(entry: &Value) -> Option<String> {
     Some(t.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
+fn modified_ms(path: &Path) -> u64 {
+    fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Reads a conversation file: its title (custom title, summary, or first prompt), prompt
 /// count and folder. With `head`, only the first `head` bytes are read, which is enough
 /// for the title and folder and keeps listing every project's history fast (the prompt
 /// count is then only for that part).
 fn read_conversation(path: &Path, head: Option<u64>) -> Option<Conversation> {
     let id = path.file_stem()?.to_str()?.to_string();
-    let modified_ms = fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
+    let modified_ms = modified_ms(path);
     let file = fs::File::open(path).ok()?;
     let reader: Box<dyn BufRead> = match head {
         Some(n) => Box::new(BufReader::new(std::io::Read::take(file, n))),
@@ -115,15 +119,16 @@ pub async fn list_conversations(cwd: String) -> Result<Vec<Conversation>, String
             return Vec::new();
         };
         let Ok(entries) = fs::read_dir(&dir) else { return Vec::new() };
-        let mut list: Vec<Conversation> = entries
+        // Newest files first by modification time (cheap), then read only as many as
+        // are shown: a busy project has hundreds of conversations, some tens of MB each.
+        let mut files: Vec<(u64, PathBuf)> = entries
             .filter_map(Result::ok)
             .map(|e| e.path())
             .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
-            .filter_map(|p| read_conversation(&p, None))
+            .map(|p| (modified_ms(&p), p))
             .collect();
-        list.sort_by_key(|c| std::cmp::Reverse(c.modified_ms));
-        list.truncate(50);
-        list
+        files.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
+        files.into_iter().filter_map(|(_, p)| read_conversation(&p, None)).take(50).collect()
     })
     .await
     .map_err(|e| e.to_string())
@@ -144,15 +149,7 @@ pub async fn list_all_conversations(limit: Option<usize>) -> Result<Vec<Conversa
             .flat_map(|d| fs::read_dir(d.path()).into_iter().flatten().filter_map(Result::ok))
             .map(|e| e.path())
             .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
-            .map(|p| {
-                let t = fs::metadata(&p)
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0);
-                (t, p)
-            })
+            .map(|p| (modified_ms(&p), p))
             .collect();
         files.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
         files
@@ -167,7 +164,7 @@ pub async fn list_all_conversations(limit: Option<usize>) -> Result<Vec<Conversa
 
 /// Whether Claude Code has saved conversation `id` for `cwd` (it only writes the
 /// file once the first message is sent).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn conversation_exists(cwd: String, id: String) -> bool {
     // Only plain UUID-like ids, so `id` can't point outside the projects folder.
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
@@ -180,7 +177,7 @@ pub fn conversation_exists(cwd: String, id: String) -> bool {
 
 /// Current branch (or short commit when detached) of the repo containing `cwd`.
 /// Reads `.git/HEAD` directly, so it's cheap enough to poll.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_branch(cwd: String) -> Option<String> {
     let mut dir = PathBuf::from(cwd);
     loop {
@@ -325,6 +322,35 @@ mod perf {
         let t = Instant::now();
         let one = tauri::async_runtime::block_on(list_conversations("/work/project-7".into())).unwrap();
         println!("list_conversations(one folder, 50 files): {} results in {:?}", one.len(), t.elapsed());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    #[ignore]
+    fn perf_busy_project() {
+        // One busy project: 300 conversations of ~1.5 MB (long sessions with big tool output).
+        let root = std::env::temp_dir().join("claude-desk-perf-busy");
+        let _ = fs::remove_dir_all(&root);
+        let dir = root.join("projects").join("-work-busy");
+        fs::create_dir_all(&dir).unwrap();
+        let big = "y".repeat(6000);
+        for c in 0..300 {
+            let mut f = fs::File::create(dir.join(format!("{c:04}-conv.jsonl"))).unwrap();
+            for i in 0..250 {
+                if i % 2 == 0 {
+                    writeln!(f, r#"{{"type":"user","cwd":"/work/busy","message":{{"content":[{{"type":"tool_result","content":"{big}"}}]}}}}"#).unwrap();
+                } else {
+                    writeln!(f, r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"{big}"}}]}}}}"#).unwrap();
+                }
+            }
+            writeln!(f, r#"{{"type":"user","cwd":"/work/busy","message":{{"content":"prompt for task {c}"}}}}"#).unwrap();
+        }
+        std::env::set_var("CLAUDE_CONFIG_DIR", &root);
+        let one = tauri::async_runtime::block_on(list_conversations("/work/busy".into())).unwrap(); // warm cache
+        let t = Instant::now();
+        let one2 = tauri::async_runtime::block_on(list_conversations("/work/busy".into())).unwrap();
+        println!("list_conversations(busy folder, 300 files, ~450 MB): {} results in {:?}", one2.len(), t.elapsed());
+        assert_eq!(one.len(), 50);
         let _ = fs::remove_dir_all(&root);
     }
 }

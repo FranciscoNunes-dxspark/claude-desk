@@ -52,7 +52,9 @@ impl Flow {
 struct Session {
     flow: Arc<Flow>,
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    /// Input for the session's writer thread. Writing to a pty blocks while the program
+    /// isn't reading, so it never happens on the command (main) thread or under `sessions`.
+    input: mpsc::Sender<Vec<u8>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
 }
 
@@ -130,6 +132,20 @@ fn launch_spec(binary: Option<&str>, args: &[String]) -> (String, Vec<String>) {
     (shell, argv)
 }
 
+/// Starts a thread that writes what it's sent to the pty, in order. It ends when the
+/// sender is dropped (the session is removed) or the pty is gone.
+fn spawn_writer(mut writer: Box<dyn Write + Send>) -> mpsc::Sender<Vec<u8>> {
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        for data in rx {
+            if writer.write_all(&data).and_then(|_| writer.flush()).is_err() {
+                break;
+            }
+        }
+    });
+    tx
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn pty_spawn(
@@ -165,7 +181,7 @@ pub fn pty_spawn(
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    let input = spawn_writer(pair.master.take_writer().map_err(|e| e.to_string())?);
     let killer = child.clone_killer();
     let flow = Arc::new(Flow::default());
 
@@ -174,7 +190,7 @@ pub fn pty_spawn(
         .sessions
         .lock()
         .unwrap()
-        .insert(id, Session { flow: flow.clone(), master: pair.master, writer, killer });
+        .insert(id, Session { flow: flow.clone(), master: pair.master, input, killer });
 
     // Reader: forward raw bytes (xterm.js handles UTF-8 split across chunks).
     let (done_tx, done_rx) = mpsc::channel::<()>();
@@ -212,10 +228,9 @@ pub fn pty_spawn(
 
 #[tauri::command]
 pub fn pty_write(state: State<'_, PtyState>, id: u32, data: String) -> Result<(), String> {
-    let mut sessions = state.sessions.lock().unwrap();
-    let s = sessions.get_mut(&id).ok_or("session not found")?;
-    s.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
-    s.writer.flush().map_err(|e| e.to_string())
+    let sessions = state.sessions.lock().unwrap();
+    let s = sessions.get(&id).ok_or("session not found")?;
+    s.input.send(data.into_bytes()).map_err(|_| "session closed".to_string())
 }
 
 #[tauri::command]
@@ -265,4 +280,32 @@ pub async fn claude_version(binary: Option<String>) -> Result<String, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    /// A program that isn't reading its input (here `sleep`) fills the pty's buffer and a
+    /// direct write blocks. Sending input must still return at once: `pty_write` runs on
+    /// the main thread, so blocking there would freeze the whole window.
+    #[test]
+    fn input_never_blocks_the_caller() {
+        let pair = native_pty_system()
+            .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let mut child = pair.slave.spawn_command({
+            let mut c = CommandBuilder::new("sleep");
+            c.arg("3");
+            c
+        }).unwrap();
+        let input = spawn_writer(pair.master.take_writer().unwrap());
+        let t = Instant::now();
+        for _ in 0..64 {
+            input.send(vec![b'x'; 16 * 1024]).unwrap(); // 1 MB, far more than a pty buffers
+        }
+        assert!(t.elapsed() < Duration::from_millis(200), "sending input blocked for {:?}", t.elapsed());
+        let _ = child.kill();
+    }
 }

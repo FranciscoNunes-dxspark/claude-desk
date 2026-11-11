@@ -32,7 +32,7 @@ pub struct WorktreeInfo {
 
 /// Where Claude Code's `--worktree <name>` lives for the repository containing `cwd`:
 /// `<repo root>/.claude/worktrees/<name>`. `None` when `cwd` isn't in a git repository.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn worktree_info(cwd: String, name: String) -> Option<WorktreeInfo> {
     let root = repo_root(Path::new(&cwd))?;
     let path = root.join(".claude").join("worktrees").join(&name);

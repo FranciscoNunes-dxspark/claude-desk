@@ -1149,7 +1149,9 @@ async function refreshBranch(s: Session) {
   const b = await invoke<string | null>("git_branch", { cwd: dirOf(s.opts) }).catch(() => null);
   s.setBranch(b);
 }
-setInterval(() => sessions.forEach((s) => void refreshBranch(s)), 4000);
+// Polled while the window is visible; catches up as soon as it's shown again.
+setInterval(() => !document.hidden && sessions.forEach((s) => void refreshBranch(s)), 4000);
+document.addEventListener("visibilitychange", () => !document.hidden && sessions.forEach((s) => void refreshBranch(s)));
 
 // ---------- search ----------
 
@@ -1682,6 +1684,10 @@ interface GitChange {
 
 let changesFor: Session | null = null;
 let changesSelected: string | null = null;
+/** What the list and diff currently show, so unchanged refreshes skip rebuilding the DOM
+ *  (re-rendering a large diff takes a few hundred ms on the UI thread). */
+let changesShown = "";
+let diffShown = "";
 let changesTimer = 0;
 let changesBusy = false;
 /** How long the last `git status` took; refreshes back off on big repositories. */
@@ -1720,6 +1726,8 @@ async function refreshChanges(reset: boolean) {
   if (reset || changesFor !== s) {
     changesFor = s;
     changesSelected = null;
+    changesShown = "";
+    diffShown = "";
     $("#ch-diff").textContent = "";
     $("#ch-diff").hidden = true;
   }
@@ -1734,29 +1742,34 @@ async function refreshChanges(reset: boolean) {
     info.textContent = res.files.length
       ? `${res.files.length} file${res.files.length === 1 ? "" : "s"} changed${res.branch ? ` on ${res.branch}` : ""}`
       : `No changes${res.branch ? ` on ${res.branch}` : ""}`;
-    const frag = document.createDocumentFragment();
-    for (const f of res.files) {
-      const code = f.status === "??" ? "?" : (f.status.trim()[0] ?? "M");
-      const li = document.createElement("li");
-      li.className = f.path === changesSelected ? "on" : "";
-      li.innerHTML = `<span class="st st-${code === "?" ? "new" : code}"></span><span class="file"><span class="fname"></span><span class="fdir"></span></span><span class="nums"></span>`;
-      li.querySelector(".st")!.textContent = code === "?" ? "U" : code;
-      (li.querySelector(".st") as HTMLElement).title = STATUS_NAMES[code] ?? f.status;
-      const slash = f.path.lastIndexOf("/");
-      li.querySelector(".fname")!.textContent = f.path.slice(slash + 1);
-      li.querySelector(".fdir")!.textContent = slash > 0 ? f.path.slice(0, slash) : "";
-      li.querySelector(".nums")!.innerHTML = f.binary
-        ? `<span class="bin">binary</span>`
-        : `<span class="add">+${f.added ?? 0}</span><span class="del">−${f.removed ?? 0}</span>`;
-      li.title = f.path;
-      li.addEventListener("click", () => {
-        changesSelected = f.path;
-        list.querySelectorAll("li").forEach((x) => x.classList.toggle("on", x === li));
-        void showDiff(s, f);
-      });
-      frag.appendChild(li);
+    const shown = JSON.stringify(res.files);
+    const listChanged = shown !== changesShown;
+    changesShown = shown;
+    if (listChanged) {
+      const frag = document.createDocumentFragment();
+      for (const f of res.files) {
+        const code = f.status === "??" ? "?" : (f.status.trim()[0] ?? "M");
+        const li = document.createElement("li");
+        li.className = f.path === changesSelected ? "on" : "";
+        li.innerHTML = `<span class="st st-${code === "?" ? "new" : code}"></span><span class="file"><span class="fname"></span><span class="fdir"></span></span><span class="nums"></span>`;
+        li.querySelector(".st")!.textContent = code === "?" ? "U" : code;
+        (li.querySelector(".st") as HTMLElement).title = STATUS_NAMES[code] ?? f.status;
+        const slash = f.path.lastIndexOf("/");
+        li.querySelector(".fname")!.textContent = f.path.slice(slash + 1);
+        li.querySelector(".fdir")!.textContent = slash > 0 ? f.path.slice(0, slash) : "";
+        li.querySelector(".nums")!.innerHTML = f.binary
+          ? `<span class="bin">binary</span>`
+          : `<span class="add">+${f.added ?? 0}</span><span class="del">−${f.removed ?? 0}</span>`;
+        li.title = f.path;
+        li.addEventListener("click", () => {
+          changesSelected = f.path;
+          list.querySelectorAll("li").forEach((x) => x.classList.toggle("on", x === li));
+          void showDiff(s, f);
+        });
+        frag.appendChild(li);
+      }
+      list.replaceChildren(frag);
     }
-    list.replaceChildren(frag);
     if (changesSelected) {
       const f = res.files.find((x) => x.path === changesSelected);
       if (f) void showDiff(s, f);
@@ -1768,6 +1781,7 @@ async function refreshChanges(reset: boolean) {
   } catch (err) {
     if (changesFor === s) {
       list.innerHTML = "";
+      changesShown = "";
       const msg = String(err);
       info.textContent = /not a git repository/i.test(msg) ? "This folder isn't a git repository." : msg;
     }
@@ -1783,6 +1797,9 @@ async function showDiff(s: Session, f: GitChange) {
     (e) => `Couldn't load the diff: ${e}`,
   );
   if (changesFor !== s || changesSelected !== f.path) return;
+  const key = `${f.path}\0${text}`;
+  if (key === diffShown) return; // unchanged since the last refresh
+  diffShown = key;
   const frag = document.createDocumentFragment();
   for (const line of text.split("\n")) {
     const div = document.createElement("div");
