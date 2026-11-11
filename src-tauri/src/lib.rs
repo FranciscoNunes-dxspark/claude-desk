@@ -17,6 +17,7 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_ack,
             pty::pty_kill,
+            pty::pty_status,
             pty::claude_version,
             extras::list_conversations,
             extras::list_all_conversations,

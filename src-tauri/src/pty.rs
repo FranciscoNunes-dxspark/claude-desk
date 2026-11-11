@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -51,6 +51,8 @@ impl Flow {
 
 struct Session {
     flow: Arc<Flow>,
+    /// Where Claude Code's status line input is saved (see `status_settings`).
+    status: Option<PathBuf>,
     master: Box<dyn MasterPty + Send>,
     /// Input for the session's writer thread. Writing to a pty blocks while the program
     /// isn't reading, so it never happens on the command (main) thread or under `sessions`.
@@ -78,6 +80,47 @@ impl Drop for PtyState {
 #[serde(rename_all = "camelCase")]
 pub struct ExitInfo {
     code: Option<u32>,
+}
+
+/// The status line Claude Code would use without us: the last of user, project and
+/// local settings that sets one (managed settings override ours anyway).
+fn own_status_line(cwd: &Path) -> Option<serde_json::Value> {
+    let files = [
+        crate::extras::claude_dir().map(|d| d.join("settings.json")),
+        Some(cwd.join(".claude").join("settings.json")),
+        Some(cwd.join(".claude").join("settings.local.json")),
+    ];
+    files
+        .into_iter()
+        .flatten()
+        .filter_map(|f| std::fs::read_to_string(f).ok())
+        .filter_map(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .filter_map(|v| v.get("statusLine").cloned())
+        .next_back()
+}
+
+/// Claude Code hands its status line command its live state as JSON: the conversation
+/// id (it changes on /clear and /resume), the model, the context window and how full
+/// it is, and the plan's usage limits. We give it a status line that saves that JSON
+/// to `status_file` (named in $CLAUDE_DESK_STATUS) and then runs the user's own status
+/// line, if any, on the same input, so theirs keeps working. Returns the settings file
+/// to pass with `--settings`.
+fn status_settings(cwd: &Path, dir: &Path, id: u32) -> Option<PathBuf> {
+    let own = own_status_line(cwd);
+    let own_cmd = own.as_ref().and_then(|v| v.get("command")).and_then(|c| c.as_str()).filter(|c| !c.trim().is_empty());
+    let command = match own_cmd {
+        Some(c) => format!("tee \"$CLAUDE_DESK_STATUS\" | ( {c}\n)"),
+        None => "cat > \"$CLAUDE_DESK_STATUS\"".to_string(),
+    };
+    let mut line = serde_json::json!({ "type": "command", "command": command });
+    for key in ["padding", "refreshInterval"] {
+        if let Some(v) = own.as_ref().and_then(|o| o.get(key)) {
+            line[key] = v.clone();
+        }
+    }
+    let path = dir.join(format!("settings-{}-{id}.json", std::process::id()));
+    std::fs::write(&path, serde_json::json!({ "statusLine": line }).to_string()).ok()?;
+    Some(path)
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -164,6 +207,19 @@ pub fn pty_spawn(
         .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
         .map_err(|e| format!("failed to open pty: {e}"))?;
 
+    let id = state.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+    // Claude Code's live status, unless the user passes settings of their own.
+    let dir = std::env::temp_dir().join("claude-desk");
+    let status_file = dir.join(format!("status-{}-{id}.json", std::process::id()));
+    let settings_file = (!args.iter().any(|a| a == "--settings"))
+        .then(|| std::fs::create_dir_all(&dir).ok())
+        .flatten()
+        .and_then(|_| status_settings(Path::new(&cwd), &dir, id));
+    let mut args = args;
+    if let Some(f) = &settings_file {
+        args.splice(0..0, ["--settings".to_string(), f.to_string_lossy().into_owned()]);
+    }
+
     let (program, argv) = launch_spec(binary.as_deref(), &args);
     let mut cmd = CommandBuilder::new(&program);
     cmd.args(&argv);
@@ -172,6 +228,7 @@ pub fn pty_spawn(
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "ClaudeDesk");
+    cmd.env("CLAUDE_DESK_STATUS", &status_file);
 
     let mut child = pair
         .slave
@@ -185,12 +242,12 @@ pub fn pty_spawn(
     let killer = child.clone_killer();
     let flow = Arc::new(Flow::default());
 
-    let id = state.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+    let status = settings_file.as_ref().map(|_| status_file.clone());
     state
         .sessions
         .lock()
         .unwrap()
-        .insert(id, Session { flow: flow.clone(), master: pair.master, input, killer });
+        .insert(id, Session { flow: flow.clone(), status, master: pair.master, input, killer });
 
     // Reader: forward raw bytes (xterm.js handles UTF-8 split across chunks).
     let (done_tx, done_rx) = mpsc::channel::<()>();
@@ -221,6 +278,10 @@ pub fn pty_spawn(
         drop(session);
         let _ = done_rx.recv_timeout(Duration::from_millis(1000));
         let _ = on_exit.send(ExitInfo { code });
+        if let Some(f) = settings_file {
+            let _ = std::fs::remove_file(f);
+            let _ = std::fs::remove_file(status_file);
+        }
     });
 
     Ok(id)
@@ -247,6 +308,21 @@ pub fn pty_ack(state: State<'_, PtyState>, id: u32, bytes: u64) {
     if let Some(s) = state.sessions.lock().unwrap().get(&id) {
         s.flow.ack(bytes);
     }
+}
+
+/// Claude Code's latest status line input for session `id` (see `status_settings`),
+/// or `None` before it has reported (or when it can't, e.g. managed settings).
+#[tauri::command]
+pub async fn pty_status(state: State<'_, PtyState>, id: u32) -> Result<Option<serde_json::Value>, String> {
+    let Some(path) = state.sessions.lock().unwrap().get(&id).and_then(|s| s.status.clone()) else {
+        return Ok(None);
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        // A half-written file (Claude is writing it right now) is skipped until next time.
+        std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok())
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -286,6 +362,54 @@ pub async fn claude_version(binary: Option<String>) -> Result<String, String> {
 mod tests {
     use super::*;
     use std::time::Instant;
+
+    /// Runs the status line command from `settings` the way Claude Code does: through
+    /// the shell, with the status JSON on stdin. Returns what it printed.
+    fn run_status_line(settings: &Path, status_file: &Path, input: &str) -> String {
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(settings).unwrap()).unwrap();
+        let cmd = v["statusLine"]["command"].as_str().unwrap();
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .env("CLAUDE_DESK_STATUS", status_file)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
+    }
+
+    #[test]
+    fn status_line_saves_claudes_status_and_keeps_the_users_own() {
+        let root = std::env::temp_dir().join(format!("claude-desk-status-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (proj, dir) = (root.join("proj"), root.join("out"));
+        std::fs::create_dir_all(proj.join(".claude")).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = r#"{"session_id":"abc","context_window":{"context_window_size":1000000}}"#;
+
+        // No status line of the user's: just save the input.
+        let status = dir.join("s1.json");
+        let settings = status_settings(&proj, &dir, 1).unwrap();
+        assert_eq!(run_status_line(&settings, &status, input), "");
+        assert_eq!(std::fs::read_to_string(&status).unwrap(), input);
+
+        // The project's own status line still runs and gets the same input.
+        std::fs::write(
+            proj.join(".claude/settings.local.json"),
+            r#"{"statusLine":{"type":"command","command":"printf 'mine:'; wc -c # comment","padding":2}}"#,
+        )
+        .unwrap();
+        let status = dir.join("s2.json");
+        let settings = status_settings(&proj, &dir, 2).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(v["statusLine"]["padding"], 2);
+        let out = run_status_line(&settings, &status, input);
+        assert_eq!(out.split_whitespace().collect::<String>(), format!("mine:{}", input.len()));
+        assert_eq!(std::fs::read_to_string(&status).unwrap(), input);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// A program that isn't reading its input (here `sleep`) fills the pty's buffer and a
     /// direct write blocks. Sending input must still return at once: `pty_write` runs on

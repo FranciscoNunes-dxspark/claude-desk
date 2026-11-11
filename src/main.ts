@@ -337,6 +337,8 @@ class Session {
   branch: string | null = null;
   /** Token usage of this session's conversation (see `conversation_usage`). */
   usage: Usage | null = null;
+  /** Claude Code's own live status (its status line input, see `pty_status`). */
+  status: ClaudeStatus | null = null;
   /** Claude Code's own status reports (OSC 7501), per id ("" is the main thread). */
   private program = new Map<string, ProgramEntry>();
   /** Set once Claude Code has reported status; the output heuristic is then off. */
@@ -574,11 +576,29 @@ class Session {
       this.flagAttention("finished", shown?.title);
     }
     if (prev !== next && changesOpen() && this === active) scheduleChangesRefresh(300);
-    if (prev !== next) void this.refreshUsage();
+    if (prev !== next) void this.refreshStatus().then(() => this.refreshUsage());
   }
 
   get running() {
     return this.ptyId != null;
+  }
+
+  /** Reads Claude Code's live status: follows /clear and /resume to the conversation
+   *  it switched to, and picks up the context window and the plan's limits. */
+  async refreshStatus() {
+    if (this.ptyId == null) return;
+    const st = await invoke<ClaudeStatus | null>("pty_status", { id: this.ptyId }).catch(() => null);
+    if (!st || JSON.stringify(st) === JSON.stringify(this.status)) return;
+    this.status = st;
+    if (st.rate_limits) noteLimits(st.rate_limits);
+    const sid = st.session_id;
+    if (sid && /^[\w-]+$/.test(sid) && sid !== this.opts.conversationId) {
+      // Restarts and restored workspaces now reopen the conversation Claude is on.
+      this.opts.conversationId = sid;
+      this.usage = null;
+      saveWorkspace();
+    }
+    this.showUsage();
   }
 
   /** Reads the conversation's token usage and shows it if it changed. */
@@ -586,14 +606,20 @@ class Session {
     const id = this.opts.conversationId;
     if (!id) return;
     const u = await invoke<Usage | null>("conversation_usage", { cwd: dirOf(this.opts), id }).catch(() => null);
-    if (!u || JSON.stringify(u) === JSON.stringify(this.usage)) return;
+    if (id !== this.opts.conversationId || JSON.stringify(u) === JSON.stringify(this.usage)) return;
     this.usage = u;
+    this.showUsage();
+  }
+
+  private showUsage() {
     renderUsage(this.el.querySelector<HTMLElement>(".usage")!, this);
-    const fill = usageFill(this);
+    const ctx = contextOf(this);
     const line = this.tab.querySelector<HTMLElement>(".ctx-line")!;
-    line.hidden = false;
-    line.dataset.level = fill.level;
-    line.querySelector("i")!.style.width = `${fill.pct}%`;
+    line.hidden = !ctx;
+    if (ctx) {
+      line.dataset.level = ctx.level;
+      line.querySelector("i")!.style.width = `${ctx.pct}%`;
+    }
     if (this === active) updateTopbar();
   }
 
@@ -790,6 +816,7 @@ class Session {
     }
     this.program.clear();
     this.statusSupported = false;
+    this.status = null;
     this.updateProgramStatus();
 
     try {
@@ -1178,16 +1205,49 @@ interface Usage {
   model: string | null;
 }
 
-/** The context window: 1M when the model was chosen with the [1m] suffix, or once the
- *  context has grown past 200K (it can't, otherwise); else the standard 200K. */
-function contextWindow(s: Session): number {
-  const asked = `${s.opts.model} ${s.opts.extra}`.toLowerCase().includes("[1m]");
-  return asked || (s.usage?.context ?? 0) > 200_000 ? 1_000_000 : 200_000;
+/** Claude Code's status line input (the parts used here). */
+interface ClaudeStatus {
+  session_id?: string;
+  model?: { id?: string; display_name?: string };
+  context_window?: {
+    total_input_tokens?: number;
+    context_window_size?: number;
+    used_percentage?: number | null;
+    current_usage?: unknown;
+  };
+  rate_limits?: RateLimits;
+}
+interface LimitWindow {
+  used_percentage: number;
+  resets_at: number;
+}
+interface RateLimits {
+  five_hour?: LimitWindow;
+  seven_day?: LimitWindow;
 }
 
-function usageFill(s: Session) {
-  const pct = Math.min(100, ((s.usage?.context ?? 0) / contextWindow(s)) * 100);
-  return { pct, level: pct >= 90 ? "full" : pct >= 70 ? "high" : "ok" };
+/** How full a session's context is: from Claude Code itself when it reports it, else
+ *  estimated from the conversation file (older Claude Code, or a status line that's
+ *  overridden by managed settings). */
+function contextOf(s: Session): { tokens: number; window: number; pct: number; level: string } | null {
+  const cw = s.status?.context_window;
+  let tokens: number;
+  let window: number;
+  let pct: number;
+  if (cw?.context_window_size) {
+    if (cw.current_usage == null) return null; // nothing sent in this conversation yet
+    tokens = cw.total_input_tokens ?? 0;
+    window = cw.context_window_size;
+    pct = cw.used_percentage ?? (tokens / window) * 100;
+  } else if (s.usage) {
+    tokens = s.usage.context;
+    // The window isn't in the file: 1M if asked for with [1m] or already past 200K.
+    const big = `${s.opts.model} ${s.opts.extra}`.toLowerCase().includes("[1m]") || tokens > 200_000;
+    window = big ? 1_000_000 : 200_000;
+    pct = (tokens / window) * 100;
+  } else return null;
+  pct = Math.max(0, Math.min(100, pct));
+  return { tokens, window, pct, level: pct >= 90 ? "full" : pct >= 70 ? "high" : "ok" };
 }
 
 function fmtTokens(n: number): string {
@@ -1199,24 +1259,71 @@ function fmtTokens(n: number): string {
 
 /** Fills a `.usage` element: a small context gauge, the tokens in context, and the details on hover. */
 function renderUsage(el: HTMLElement, s: Session) {
+  const ctx = contextOf(s);
+  el.hidden = !ctx;
+  if (!ctx) return;
   const u = s.usage;
-  el.hidden = !u;
-  if (!u) return;
-  const { pct, level } = usageFill(s);
   const n = (v: number) => v.toLocaleString();
-  el.dataset.level = level;
+  el.dataset.level = ctx.level;
   el.innerHTML = `<span class="meter"><i></i></span><span class="num"></span>`;
-  el.querySelector<HTMLElement>(".meter i")!.style.width = `${pct}%`;
-  el.querySelector(".num")!.textContent = fmtTokens(u.context);
+  el.querySelector<HTMLElement>(".meter i")!.style.width = `${ctx.pct}%`;
+  el.querySelector(".num")!.textContent = fmtTokens(ctx.tokens);
+  const model = s.status?.model?.display_name ?? u?.model;
   el.title = [
-    `Context: ${n(u.context)} of ${fmtTokens(contextWindow(s))} tokens (${Math.round(pct)}%)`,
-    `This conversation: ${n(u.input + u.cacheRead + u.cacheWrite)} input tokens (${n(u.cacheRead)} read from cache), ${n(u.output)} output`,
-    `${u.requests} request${u.requests === 1 ? "" : "s"}${u.model ? ` · ${u.model}` : ""}`,
-  ].join("\n");
+    `Context: ${n(ctx.tokens)} of ${fmtTokens(ctx.window)} tokens (${Math.round(ctx.pct)}%)`,
+    u ? `This conversation: ${n(u.input + u.cacheRead + u.cacheWrite)} input tokens (${n(u.cacheRead)} read from cache), ${n(u.output)} output` : "",
+    [u ? `${u.requests} request${u.requests === 1 ? "" : "s"}` : "", model].filter(Boolean).join(" · "),
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
-// Cheap to poll: only what Claude Code appended since the last read is parsed.
-setInterval(() => !document.hidden && sessions.forEach((s) => s.running && void s.refreshUsage()), 3000);
+// ---------- plan usage limits ----------
+// Claude Code reports the subscription's 5-hour and weekly usage to its status line;
+// they're the account's, so the sidebar shows the latest any session reported.
+
+let limits: RateLimits | null = null;
+
+function noteLimits(l: RateLimits) {
+  limits = l;
+  renderLimits();
+}
+
+function renderLimits() {
+  const el = $("#limits");
+  const now = Date.now() / 1000;
+  const windows: [string, LimitWindow][] = [];
+  for (const [label, w] of [["5-hour", limits?.five_hour], ["Weekly", limits?.seven_day]] as const) {
+    if (w && w.resets_at > now) windows.push([label, w]);
+  }
+  el.hidden = !windows.length;
+  el.replaceChildren(
+    ...windows.map(([label, w]) => {
+      const pct = Math.max(0, Math.min(100, w.used_percentage));
+      const row = document.createElement("div");
+      row.className = "limit";
+      row.dataset.level = pct >= 90 ? "full" : pct >= 70 ? "high" : "ok";
+      row.innerHTML = `<span class="l-name"></span><span class="meter"><i></i></span><span class="l-pct"></span>`;
+      row.querySelector(".l-name")!.textContent = label;
+      row.querySelector<HTMLElement>(".meter i")!.style.width = `${pct}%`;
+      row.querySelector(".l-pct")!.textContent = `${Math.round(pct)}%`;
+      const reset = new Date(w.resets_at * 1000);
+      const when = reset.toDateString() === new Date().toDateString()
+        ? reset.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+        : reset.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
+      row.title = `${label} plan usage limit: ${Math.round(pct)}% used · resets ${when}`;
+      return row;
+    }),
+  );
+}
+setInterval(renderLimits, 60_000); // drop a window once it has reset
+
+// Cheap to poll: a small status file, and only what Claude Code appended to the
+// conversation since the last read.
+setInterval(() => {
+  if (document.hidden) return;
+  for (const s of sessions) if (s.running) void s.refreshStatus().then(() => s.refreshUsage());
+}, 2000);
 
 // ---------- git branch ----------
 

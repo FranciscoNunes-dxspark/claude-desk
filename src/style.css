@@ -272,6 +272,7 @@ body.mac #sidebar { padding-top: 40px; }
 #tabs li:hover .icon-btn { display: grid; }
 #tabs li:hover kbd { display: none; }
 
+.limits:not([hidden]) + footer { border-top: 0; }
 #sidebar footer {
   display: flex;
   align-items: center;
@@ -1146,3 +1147,22 @@ dialog.wide { width: min(720px, calc(100vw - 32px)); }
 .ctx-line[hidden] { display: none; }
 .ctx-line i { opacity: .7; }
 body.sidebar-collapsed .ctx-line { left: 8px; right: 8px; bottom: 2px; }
+
+/* Plan usage limits, above the sidebar footer. */
+.limits {
+  display: grid;
+  gap: 5px;
+  padding: 8px 4px 10px 8px;
+  border-top: 1px solid var(--hairline);
+  font-size: 11px;
+  color: var(--text-3);
+}
+.limits[hidden], body.sidebar-collapsed .limits { display: none; }
+.limit { display: grid; grid-template-columns: 52px 1fr 34px; align-items: center; gap: 8px; cursor: default; }
+.limit .meter { position: relative; height: 4px; border-radius: 2px; background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--hairline); overflow: hidden; }
+.limit .meter i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--text-3); transition: width .3s ease-out; }
+.limit .l-pct { text-align: right; font-variant-numeric: tabular-nums; }
+.limit[data-level="high"] .meter i { background: var(--st-working); }
+.limit[data-level="high"] .l-pct { color: var(--st-working); }
+.limit[data-level="full"] .meter i { background: var(--accent); }
+.limit[data-level="full"] .l-pct { color: var(--accent-hi); }
