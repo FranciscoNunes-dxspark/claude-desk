@@ -11,7 +11,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -223,6 +223,19 @@ function timeAgo(ms: number) {
   if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
   if (s < 86400 * 7) return `${Math.floor(s / 86400)} d ago`;
   return new Date(ms).toLocaleDateString();
+}
+
+/**
+ * Asks before something destructive. (The web view's `confirm()` is replaced by the
+ * dialog plugin with an async version, so it can't be used as a yes/no answer.)
+ * If the dialog can't be shown, goes ahead rather than leaving the action stuck.
+ */
+async function askToConfirm(message: string, okLabel: string): Promise<boolean> {
+  try {
+    return await ask(message, { title: "Claude Desk", kind: "warning", okLabel, cancelLabel: "Cancel" });
+  } catch {
+    return true;
+  }
 }
 
 function toast(where: HTMLElement, message: string) {
@@ -1129,8 +1142,18 @@ function updateTopbar() {
     : `${sessions.length} sessions · ${LAYOUT_NAMES[layout]}`;
 }
 
-function closeSession(s: Session) {
-  if (s.running && !confirm(`End the Claude session "${displayName(s.opts)}"?`)) return;
+/** Sessions waiting on "End the session?", so a second click doesn't ask twice. */
+const closing = new Set<Session>();
+
+async function closeSession(s: Session) {
+  if (closing.has(s) || !sessions.includes(s)) return;
+  if (s.running) {
+    closing.add(s);
+    const ok = await askToConfirm(`End the Claude session "${displayName(s.opts)}"?`, "End session");
+    closing.delete(s);
+    // Closed meanwhile (e.g. from its banner after it exited)?
+    if (!ok || !sessions.includes(s)) return;
+  }
   const i = sessions.indexOf(s);
   sessions.splice(i, 1);
   if (zoomed === s) zoomed = null;
@@ -1720,11 +1743,12 @@ async function installUpdate() {
   const running = sessions.filter((s) => s.running).length;
   if (
     running &&
-    !confirm(
+    !(await askToConfirm(
       settings.restore
         ? `Install the update now? Your ${running} session${running === 1 ? "" : "s"} will reopen after the restart and continue where they left off.`
         : `Restarting ends ${running} running Claude session${running === 1 ? "" : "s"}. Install the update now?`,
-    )
+      "Install and restart",
+    ))
   ) {
     return;
   }
