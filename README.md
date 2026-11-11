@@ -62,6 +62,20 @@ Build an installer (`.dmg` / `.msi` / `.deb` / `.AppImage`, depending on the OS)
 npm run tauri build
 ```
 
+## Tests
+
+CI (`.github/workflows/ci.yml`) runs these on every pull request; the Rust tests on
+Linux, Windows and macOS.
+
+```bash
+cd src-tauri && cargo test --release   # backend: pty I/O, flow control, status line, usage, git
+npm run test:ui                        # the app in headless Chromium against a scripted backend
+```
+
+`npm run test:ui` needs Playwright's Chromium once: `npx playwright install chromium`.
+Its scenarios are ways a session used to freeze, ignore input or end up in a wrong
+state; each one fails on the code before its fix.
+
 ## Releases and updates
 
 Releases work like Fleet's desktop window:

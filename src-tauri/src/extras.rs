@@ -212,7 +212,7 @@ pub fn git_branch(cwd: String) -> Option<String> {
 /// short-lived one would lose the text as soon as it's dropped.
 fn with_clipboard<T>(f: impl FnOnce(&mut arboard::Clipboard) -> Result<T, String>) -> Result<T, String> {
     static CLIPBOARD: std::sync::OnceLock<std::sync::Mutex<Option<arboard::Clipboard>>> = std::sync::OnceLock::new();
-    let mut slot = CLIPBOARD.get_or_init(Default::default).lock().map_err(|e| e.to_string())?;
+    let mut slot = CLIPBOARD.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
     if slot.is_none() {
         *slot = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
     }

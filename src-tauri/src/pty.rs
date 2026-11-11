@@ -12,10 +12,22 @@ use serde::Serialize;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Manager, State};
 
-/// Backpressure: the reader stops once this many bytes are sent but not yet
-/// acknowledged by the webview. Output then waits in the kernel's pty buffer
-/// and the program blocks, like in a regular terminal.
+/// Backpressure: the reader pauses once this many bytes are sent but not yet
+/// acknowledged by the webview. Output then waits in the kernel's pty buffer and the
+/// program blocks, like in a regular terminal, so a flood can't outrun the screen.
 const MAX_UNACKED: u64 = 1 << 20;
+
+/// How long the reader waits for the webview to catch up before carrying on anyway.
+/// Flow control must never stall a session: acks can stop for reasons that have
+/// nothing to do with the program (a minimised window's throttled timers, a lost
+/// message, a bug), and a program blocked on its output also stops reading input.
+const MAX_ACK_WAIT: Duration = Duration::from_secs(2);
+
+/// Locks a mutex even if a thread panicked while holding it. The data guarded here
+/// stays consistent across a panic, and refusing it would take every session down.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 #[derive(Default)]
 struct FlowState {
@@ -23,29 +35,62 @@ struct FlowState {
     closed: bool,
 }
 
-#[derive(Default)]
 struct Flow {
     state: Mutex<FlowState>,
     cv: Condvar,
+    max_wait: Duration,
+}
+
+impl Default for Flow {
+    fn default() -> Self {
+        Flow { state: Mutex::default(), cv: Condvar::new(), max_wait: MAX_ACK_WAIT }
+    }
 }
 
 impl Flow {
-    /// Blocks while the webview is too far behind, then records `n` sent bytes.
+    /// Waits while the webview is too far behind (at most `max_wait` without any
+    /// progress, after which the backlog is forgiven), then records `n` sent bytes.
     fn before_send(&self, n: usize) {
-        let mut st = self.state.lock().unwrap();
+        let mut st = lock(&self.state);
         while st.unacked > MAX_UNACKED && !st.closed {
-            st = self.cv.wait(st).unwrap();
+            let before = st.unacked;
+            let (next, wait) = self.cv.wait_timeout(st, self.max_wait).unwrap_or_else(|e| e.into_inner());
+            st = next;
+            if wait.timed_out() && st.unacked >= before {
+                st.unacked = 0;
+            }
         }
         st.unacked += n as u64;
     }
     fn ack(&self, n: u64) {
-        let mut st = self.state.lock().unwrap();
+        let mut st = lock(&self.state);
         st.unacked = st.unacked.saturating_sub(n);
         self.cv.notify_all();
     }
     fn close(&self) {
-        self.state.lock().unwrap().closed = true;
+        lock(&self.state).closed = true;
         self.cv.notify_all();
+    }
+}
+
+/// Copies the pty's output to `send` until the program closes it, applying `flow`.
+/// Stops when `send` reports the webview is gone. Interrupted reads are retried:
+/// treating them as the end would cut off a live session's output for good.
+fn pump(mut reader: impl Read, flow: &Flow, mut send: impl FnMut(Vec<u8>) -> bool) {
+    let mut buf = vec![0u8; 16 * 1024];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => return,
+            Ok(n) => {
+                flow.before_send(n);
+                if !send(buf[..n].to_vec()) {
+                    return;
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(5)),
+            Err(_) => return, // e.g. EIO on Linux once the program has exited
+        }
     }
 }
 
@@ -95,10 +140,8 @@ pub struct PtyState {
 
 impl Drop for PtyState {
     fn drop(&mut self) {
-        if let Ok(mut sessions) = self.sessions.lock() {
-            for (_, mut s) in sessions.drain() {
-                let _ = s.kill();
-            }
+        for (_, mut s) in lock(&self.sessions).drain() {
+            let _ = s.kill();
         }
     }
 }
@@ -309,28 +352,13 @@ pub fn pty_spawn(
     let flow = Arc::new(Flow::default());
 
     let status = settings_file.as_ref().map(|_| status_file.clone());
-    state
-        .sessions
-        .lock()
-        .unwrap()
-        .insert(id, Session { flow: flow.clone(), status, resize, input, killer, pid });
+    lock(&state.sessions).insert(id, Session { flow: flow.clone(), status, resize, input, killer, pid });
 
     // Reader: forward raw bytes (xterm.js handles UTF-8 split across chunks).
     let (done_tx, done_rx) = mpsc::channel::<()>();
     let reader_flow = flow.clone();
     std::thread::spawn(move || {
-        let mut buf = [0u8; 16 * 1024];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    reader_flow.before_send(n);
-                    if on_data.send(InvokeResponseBody::Raw(buf[..n].to_vec())).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
+        pump(&mut reader, &reader_flow, |chunk| on_data.send(InvokeResponseBody::Raw(chunk)).is_ok());
         let _ = done_tx.send(());
     });
 
@@ -340,7 +368,7 @@ pub fn pty_spawn(
         // Never leave the reader parked waiting for acks after exit.
         flow.close();
         // Dropping the master unblocks the reader on Windows (ConPTY).
-        let session = app.state::<PtyState>().sessions.lock().unwrap().remove(&id);
+        let session = lock(&app.state::<PtyState>().sessions).remove(&id);
         drop(session);
         let _ = done_rx.recv_timeout(Duration::from_millis(1000));
         let _ = on_exit.send(ExitInfo { code });
@@ -355,14 +383,14 @@ pub fn pty_spawn(
 
 #[tauri::command]
 pub fn pty_write(state: State<'_, PtyState>, id: u32, data: String) -> Result<(), String> {
-    let sessions = state.sessions.lock().unwrap();
+    let sessions = lock(&state.sessions);
     let s = sessions.get(&id).ok_or("session not found")?;
     s.input.send(data.into_bytes()).map_err(|_| "session closed".to_string())
 }
 
 #[tauri::command]
 pub fn pty_resize(state: State<'_, PtyState>, id: u32, cols: u16, rows: u16) -> Result<(), String> {
-    let sessions = state.sessions.lock().unwrap();
+    let sessions = lock(&state.sessions);
     let s = sessions.get(&id).ok_or("session not found")?;
     s.resize
         .send(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
@@ -371,7 +399,7 @@ pub fn pty_resize(state: State<'_, PtyState>, id: u32, cols: u16, rows: u16) -> 
 
 #[tauri::command]
 pub fn pty_ack(state: State<'_, PtyState>, id: u32, bytes: u64) {
-    if let Some(s) = state.sessions.lock().unwrap().get(&id) {
+    if let Some(s) = lock(&state.sessions).get(&id) {
         s.flow.ack(bytes);
     }
 }
@@ -380,7 +408,7 @@ pub fn pty_ack(state: State<'_, PtyState>, id: u32, bytes: u64) {
 /// or `None` before it has reported (or when it can't, e.g. managed settings).
 #[tauri::command]
 pub async fn pty_status(state: State<'_, PtyState>, id: u32) -> Result<Option<serde_json::Value>, String> {
-    let Some(path) = state.sessions.lock().unwrap().get(&id).and_then(|s| s.status.clone()) else {
+    let Some(path) = lock(&state.sessions).get(&id).and_then(|s| s.status.clone()) else {
         return Ok(None);
     };
     tauri::async_runtime::spawn_blocking(move || {
@@ -393,7 +421,7 @@ pub async fn pty_status(state: State<'_, PtyState>, id: u32) -> Result<Option<se
 
 #[tauri::command]
 pub fn pty_kill(state: State<'_, PtyState>, id: u32) -> Result<(), String> {
-    let mut sessions = state.sessions.lock().unwrap();
+    let mut sessions = lock(&state.sessions);
     if let Some(s) = sessions.get_mut(&id) {
         s.kill().map_err(|e| e.to_string())?;
     }
@@ -501,6 +529,117 @@ mod tests {
     /// A program that isn't reading its input (here `sleep`) fills the pty's buffer and a
     /// direct write blocks. Sending input must still return at once: `pty_write` runs on
     /// the main thread, so blocking there would freeze the whole window.
+    fn flow(max_wait_ms: u64) -> Flow {
+        Flow { max_wait: Duration::from_millis(max_wait_ms), ..Flow::default() }
+    }
+
+    #[test]
+    fn flow_waits_for_acks_while_they_come() {
+        let f = Arc::new(flow(5_000));
+        f.before_send(MAX_UNACKED as usize + 1);
+        let acker = f.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            acker.ack(MAX_UNACKED);
+        });
+        let t = Instant::now();
+        f.before_send(1);
+        assert!(t.elapsed() >= Duration::from_millis(90), "didn't wait for the ack");
+        assert!(t.elapsed() < Duration::from_secs(2), "kept waiting after the ack");
+    }
+
+    #[test]
+    fn flow_never_stalls_when_acks_stop() {
+        let f = flow(100);
+        let t = Instant::now();
+        for _ in 0..(4 << 20) / (16 << 10) {
+            f.before_send(16 << 10); // 4 MB, never acknowledged
+        }
+        assert!(t.elapsed() < Duration::from_secs(2), "stalled for {:?}", t.elapsed());
+    }
+
+    #[test]
+    fn locks_survive_a_panic() {
+        let m = Arc::new(Mutex::new(1));
+        let m2 = m.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = m2.lock().unwrap();
+            panic!("while holding the lock");
+        })
+        .join();
+        assert!(m.is_poisoned());
+        *lock(&m) += 1;
+        assert_eq!(*lock(&m), 2);
+    }
+
+    #[test]
+    fn pump_retries_interrupted_reads() {
+        struct Flaky(Vec<std::io::Result<Vec<u8>>>);
+        impl Read for Flaky {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.0.is_empty() {
+                    return Ok(0);
+                }
+                let next = self.0.remove(0)?;
+                buf[..next.len()].copy_from_slice(&next);
+                Ok(next.len())
+            }
+        }
+        let interrupted = || Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+        let reader = Flaky(vec![Ok(b"one ".to_vec()), interrupted(), Ok(b"two ".to_vec()), interrupted(), Ok(b"three".to_vec())]);
+        let mut out = Vec::new();
+        pump(reader, &Flow::default(), |c| {
+            out.extend(c);
+            true
+        });
+        assert_eq!(out, b"one two three");
+    }
+
+    /// A real program writing ~2.5 MB through a pty: everything arrives, in order,
+    /// and the program finishes, whether the consumer keeps up or never acknowledges.
+    fn stream_through_pty(ack: bool) {
+        let pair = native_pty_system()
+            .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let mut cmd = CommandBuilder::new("seq");
+        cmd.args(["1", "400000"]);
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let reader = pair.master.try_clone_reader().unwrap();
+        let f = Arc::new(flow(200));
+        let pumping = f.clone();
+        let t = Instant::now();
+        let collector = std::thread::spawn(move || {
+            let mut out = Vec::new();
+            pump(reader, &pumping, |c| {
+                if ack {
+                    pumping.ack(c.len() as u64);
+                }
+                out.extend(c);
+                true
+            });
+            out
+        });
+        let status = child.wait().unwrap();
+        drop(pair.master); // EOF for the reader
+        let out = String::from_utf8(collector.join().unwrap()).unwrap();
+        assert!(status.success());
+        let lines: Vec<&str> = out.split("\r\n").filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines.len(), 400_000);
+        assert!(lines.iter().enumerate().all(|(i, l)| l.parse::<usize>() == Ok(i + 1)), "output out of order or corrupted");
+        assert!(t.elapsed() < Duration::from_secs(20), "took {:?}", t.elapsed());
+    }
+
+    #[test]
+    fn pty_output_arrives_complete_when_acknowledged() {
+        stream_through_pty(true);
+    }
+
+    #[test]
+    fn pty_output_never_stalls_without_acks() {
+        stream_through_pty(false);
+    }
+
     #[test]
     fn resizer_applies_the_newest_size() {
         let pair = native_pty_system()
