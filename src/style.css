@@ -206,10 +206,10 @@ body.mac #sidebar { padding-top: 40px; }
   width: 24px;
   height: 24px;
   border-radius: 6px;
-  background: linear-gradient(180deg, #2a3b62, #141b2b);
-  box-shadow: inset 0 0 0 1px #ffffff1c, 0 1px 3px #0006;
+  background: linear-gradient(180deg, #f7c35a, #e9a020);
+  box-shadow: inset 0 0 0 1px #00000024, 0 1px 3px #0006;
 }
-.logo svg { width: 17px; height: 17px; fill: none; color: #ece7dc; stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+.logo svg { width: 17px; height: 17px; fill: none; color: #151a22; stroke: currentColor; stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
 .brand { font-weight: 600; font-size: 13.5px; letter-spacing: -0.01em; }
 
 .new-btn {
@@ -517,10 +517,10 @@ body.is-split .tb-split-label { display: block; margin-right: auto; }
   height: 52px;
   margin-bottom: 20px;
   border-radius: 14px;
-  background: linear-gradient(180deg, #2a3b62, #141b2b);
-  box-shadow: inset 0 0 0 1px #ffffff1c, 0 8px 24px #0005, 0 2px 4px #0006;
+  background: linear-gradient(180deg, #f7c35a, #e9a020);
+  box-shadow: inset 0 0 0 1px #00000024, 0 8px 24px #0005, 0 2px 4px #0006;
 }
-.hero-mark svg { width: 36px; height: 36px; fill: none; color: #ece7dc; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.hero-mark svg { width: 36px; height: 36px; fill: none; color: #151a22; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
 .hero h1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
 .hero p { margin: 0 0 22px; color: var(--text-2); line-height: 1.5; }
 .hero-actions { display: flex; gap: 8px; }
@@ -855,10 +855,10 @@ body.resizing-col .term-body, body.resizing-row .term-body { pointer-events: non
   height: 26px;
   flex: none;
   border-radius: 7px;
-  background: linear-gradient(180deg, #2a3b62, #141b2b);
-  box-shadow: inset 0 0 0 1px #ffffff1c;
+  background: linear-gradient(180deg, #f7c35a, #e9a020);
+  box-shadow: inset 0 0 0 1px #00000024;
 }
-.ut-mark svg { width: 18px; height: 18px; fill: none; color: #ece7dc; stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+.ut-mark svg { width: 18px; height: 18px; fill: none; color: #151a22; stroke: currentColor; stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
 .ut-text { font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .update-toast .btn { height: 28px; flex: none; }
 .update-toast .btn:disabled { opacity: .8; cursor: progress; }
