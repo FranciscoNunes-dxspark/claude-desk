@@ -53,7 +53,10 @@ struct Session {
     flow: Arc<Flow>,
     /// Where Claude Code's status line input is saved (see `status_settings`).
     status: Option<PathBuf>,
-    master: Box<dyn MasterPty + Send>,
+    /// Sizes for the session's resizer thread, which owns the pty's master side.
+    /// Resizing a ConPTY can wait on the console host, which may itself be waiting
+    /// for us to read output, so it never happens on the main thread or under `sessions`.
+    resize: mpsc::Sender<PtySize>,
     /// Input for the session's writer thread. Writing to a pty blocks while the program
     /// isn't reading, so it never happens on the command (main) thread or under `sessions`.
     input: mpsc::Sender<Vec<u8>>,
@@ -226,9 +229,25 @@ fn spawn_writer(mut writer: Box<dyn Write + Send>) -> mpsc::Sender<Vec<u8>> {
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     std::thread::spawn(move || {
         for data in rx {
-            if writer.write_all(&data).and_then(|_| writer.flush()).is_err() {
-                break;
+            // A failed write loses only this input: stopping here would silently
+            // drop every later keystroke while the session still looks alive.
+            let _ = writer.write_all(&data).and_then(|_| writer.flush());
+        }
+    });
+    tx
+}
+
+/// Starts a thread that owns the pty's master side and applies the sizes it's sent,
+/// skipping to the newest when several are queued. Dropping the sender (removing the
+/// session) ends it and drops the master, which unblocks the reader on Windows.
+fn spawn_resizer(master: Box<dyn MasterPty + Send>) -> mpsc::Sender<PtySize> {
+    let (tx, rx) = mpsc::channel::<PtySize>();
+    std::thread::spawn(move || {
+        while let Ok(mut size) = rx.recv() {
+            while let Ok(newer) = rx.try_recv() {
+                size = newer;
             }
+            let _ = master.resize(size);
         }
     });
     tx
@@ -284,6 +303,7 @@ pub fn pty_spawn(
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let input = spawn_writer(pair.master.take_writer().map_err(|e| e.to_string())?);
+    let resize = spawn_resizer(pair.master);
     let killer = child.clone_killer();
     let pid = child.process_id();
     let flow = Arc::new(Flow::default());
@@ -293,7 +313,7 @@ pub fn pty_spawn(
         .sessions
         .lock()
         .unwrap()
-        .insert(id, Session { flow: flow.clone(), status, master: pair.master, input, killer, pid });
+        .insert(id, Session { flow: flow.clone(), status, resize, input, killer, pid });
 
     // Reader: forward raw bytes (xterm.js handles UTF-8 split across chunks).
     let (done_tx, done_rx) = mpsc::channel::<()>();
@@ -344,9 +364,9 @@ pub fn pty_write(state: State<'_, PtyState>, id: u32, data: String) -> Result<()
 pub fn pty_resize(state: State<'_, PtyState>, id: u32, cols: u16, rows: u16) -> Result<(), String> {
     let sessions = state.sessions.lock().unwrap();
     let s = sessions.get(&id).ok_or("session not found")?;
-    s.master
-        .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
-        .map_err(|e| e.to_string())
+    s.resize
+        .send(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+        .map_err(|_| "session closed".to_string())
 }
 
 #[tauri::command]
@@ -481,6 +501,35 @@ mod tests {
     /// A program that isn't reading its input (here `sleep`) fills the pty's buffer and a
     /// direct write blocks. Sending input must still return at once: `pty_write` runs on
     /// the main thread, so blocking there would freeze the whole window.
+    #[test]
+    fn resizer_applies_the_newest_size() {
+        let pair = native_pty_system()
+            .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", "sleep 0.5; stty size"]);
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let resize = spawn_resizer(pair.master);
+        for (rows, cols) in [(30, 100), (40, 120), (50, 132)] {
+            resize.send(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).unwrap();
+        }
+        child.wait().unwrap();
+        let mut out = String::new();
+        let mut buf = [0u8; 256];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            out.push_str(&String::from_utf8_lossy(&buf[..n]));
+            if out.contains('\n') {
+                break;
+            }
+        }
+        assert_eq!(out.trim(), "50 132");
+    }
+
     #[test]
     fn input_never_blocks_the_caller() {
         let pair = native_pty_system()

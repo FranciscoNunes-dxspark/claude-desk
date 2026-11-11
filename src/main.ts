@@ -339,6 +339,23 @@ function stateLabel(state: ProgramState | null, kind?: string): string {
   }
 }
 
+/**
+ * Wraps code that xterm runs while parsing output (escape-sequence handlers, the bell).
+ * An exception there stops xterm processing that terminal's output for good: nothing
+ * more is drawn or acknowledged, the backend stops reading, and Claude blocks on its
+ * output, so the session freezes. Errors are logged instead.
+ */
+function guarded<A extends unknown[]>(fn: (...args: A) => boolean | void): (...args: A) => boolean {
+  return (...args) => {
+    try {
+      return fn(...args) ?? true;
+    } catch (err) {
+      console.error("terminal handler failed:", err);
+      return true;
+    }
+  };
+}
+
 class Session {
   readonly el: HTMLDivElement;
   readonly body: HTMLDivElement;
@@ -438,27 +455,27 @@ class Session {
     // Claude Code's program status (OSC 7501): it asks "7501;?" at startup and, if the
     // terminal answers, reports state=working|blocked|idle|done|clear with a title,
     // message and, when blocked, a kind (permission, question).
-    this.term.parser.registerOscHandler(7501, (data) => {
+    this.term.parser.registerOscHandler(7501, guarded((data) => {
       if (data.startsWith("?")) {
         this.write("\x1b]7501;?\x07");
         return true;
       }
       this.onProgramStatus(data);
       return true;
-    });
+    }));
 
     // Explicit "look at me" signals: terminal bell and OSC 9 / OSC 777 notifications.
-    this.term.onBell(() => this.flagAttention("needs your attention"));
-    this.term.parser.registerOscHandler(9, (data) => {
+    this.term.onBell(guarded(() => this.flagAttention("needs your attention")));
+    this.term.parser.registerOscHandler(9, guarded((data) => {
       // OSC 9;4 is a progress report, not a notification.
       if (!/^4;/.test(data)) this.flagAttention("needs your attention", data);
       return true;
-    });
-    this.term.parser.registerOscHandler(777, (data) => {
+    }));
+    this.term.parser.registerOscHandler(777, guarded((data) => {
       const [kind, title, body] = data.split(";");
       if (kind === "notify") this.flagAttention(title || "needs your attention", body);
       return true;
-    });
+    }));
 
     this.search.onDidChangeResults(({ resultIndex, resultCount }) => {
       if (this === active) {
