@@ -962,6 +962,10 @@ dialog menu { position: sticky; bottom: -22px; z-index: 1; background: var(--sur
 #tabs li.colored { box-shadow: inset 3px 0 0 var(--session-color); }
 #tabs li.colored.active { box-shadow: inset 3px 0 0 var(--session-color), inset 0 0 0 1px var(--hairline); }
 #tabs li.colored.active::before { display: none; }
+/* Collapsed: the colour is on the initial only, not the tab around it. */
+body.sidebar-collapsed #tabs li.colored { box-shadow: none; }
+body.sidebar-collapsed #tabs li.colored.active { box-shadow: inset 0 0 0 1px var(--hairline); }
+body.sidebar-collapsed #tabs li.colored.active::before { display: block; }
 body.sidebar-collapsed #tabs li.colored .initial { box-shadow: inset 0 0 0 1.5px var(--session-color); color: var(--session-color); }
 #terminals.split .term.colored .pane-head { box-shadow: inset 0 2px 0 var(--session-color); }
 #terminals.split .term.colored .pane-name { color: var(--session-color); }
