@@ -206,7 +206,7 @@ body.mac #sidebar { padding-top: 40px; }
   width: 24px;
   height: 24px;
   border-radius: 6px;
-  background: #12151a;
+  background: linear-gradient(180deg, #2a3b62, #141b2b);
   box-shadow: inset 0 0 0 1px #ffffff1c, 0 1px 3px #0006;
 }
 .logo svg { width: 17px; height: 17px; fill: none; color: #ece7dc; stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
@@ -517,7 +517,7 @@ body.is-split .tb-split-label { display: block; margin-right: auto; }
   height: 52px;
   margin-bottom: 20px;
   border-radius: 14px;
-  background: #12151a;
+  background: linear-gradient(180deg, #2a3b62, #141b2b);
   box-shadow: inset 0 0 0 1px #ffffff1c, 0 8px 24px #0005, 0 2px 4px #0006;
 }
 .hero-mark svg { width: 36px; height: 36px; fill: none; color: #ece7dc; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
@@ -855,7 +855,7 @@ body.resizing-col .term-body, body.resizing-row .term-body { pointer-events: non
   height: 26px;
   flex: none;
   border-radius: 7px;
-  background: #12151a;
+  background: linear-gradient(180deg, #2a3b62, #141b2b);
   box-shadow: inset 0 0 0 1px #ffffff1c;
 }
 .ut-mark svg { width: 18px; height: 18px; fill: none; color: #ece7dc; stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
