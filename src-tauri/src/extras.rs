@@ -13,7 +13,7 @@ fn home_dir() -> Option<PathBuf> {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
 }
 
-fn claude_dir() -> Option<PathBuf> {
+pub(crate) fn claude_dir() -> Option<PathBuf> {
     std::env::var_os("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
         .or_else(|| home_dir().map(|h| h.join(".claude")))
@@ -21,7 +21,7 @@ fn claude_dir() -> Option<PathBuf> {
 
 /// Claude Code stores each project's conversations in a folder named after
 /// the working directory with every non-alphanumeric character replaced by '-'.
-fn project_key(cwd: &str) -> String {
+pub(crate) fn project_key(cwd: &str) -> String {
     cwd.trim_end_matches(['/', '\\'])
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })

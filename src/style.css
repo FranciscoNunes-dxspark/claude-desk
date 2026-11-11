@@ -1094,3 +1094,55 @@ dialog.wide { width: min(720px, calc(100vw - 32px)); }
 #f-worktree-row.disabled .toggle { opacity: .5; cursor: default; }
 #f-wt-name-row[hidden] { display: none; }
 #f-defaults-hint:empty { display: none; }
+
+/* ---------- token usage ---------- */
+
+.usage {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  white-space: nowrap;
+  flex: none;
+  cursor: default;
+}
+.usage[hidden] { display: none; }
+#tb-usage { align-self: center; font-size: 11px; }
+.usage .meter {
+  position: relative;
+  width: 34px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-3);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  overflow: hidden;
+}
+.usage .meter i, .ctx-line i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--text-3);
+  transition: width .3s ease-out;
+}
+.usage[data-level="high"] { color: var(--st-working); }
+.usage[data-level="full"] { color: var(--accent-hi); }
+[data-level="high"] > i, .usage[data-level="high"] .meter i { background: var(--st-working); }
+[data-level="full"] > i, .usage[data-level="full"] .meter i { background: var(--accent); }
+
+/* Sidebar: a hairline along the bottom of each tab shows how full its context is. */
+.ctx-line {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 3px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--hairline);
+  overflow: hidden;
+  pointer-events: none;
+}
+.ctx-line[hidden] { display: none; }
+.ctx-line i { opacity: .7; }
+body.sidebar-collapsed .ctx-line { left: 8px; right: 8px; bottom: 2px; }

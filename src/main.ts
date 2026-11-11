@@ -335,6 +335,8 @@ class Session {
   readonly tab: HTMLLIElement;
   attention = false;
   branch: string | null = null;
+  /** Token usage of this session's conversation (see `conversation_usage`). */
+  usage: Usage | null = null;
   /** Claude Code's own status reports (OSC 7501), per id ("" is the main thread). */
   private program = new Map<string, ProgramEntry>();
   /** Set once Claude Code has reported status; the output heuristic is then off. */
@@ -358,6 +360,7 @@ class Session {
         <span class="pane-path"></span>
         <span class="branch" hidden></span>
         <span class="state-label" hidden></span>
+        <span class="usage" hidden></span>
         <span class="chips-row"></span>
         <button class="icon-btn" data-act="zoom" title="Maximise">${icon("max")}</button>
         <button class="icon-btn" data-act="restart" title="Restart session">${icon("restart")}</button>
@@ -470,7 +473,8 @@ class Session {
       <span class="initial"></span>
       <span class="meta"><span class="name"></span><span class="path"></span><span class="status-line" hidden></span></span>
       <kbd></kbd>
-      <button class="icon-btn close" title="Close session">${icon("x")}</button>`;
+      <button class="icon-btn close" title="Close session">${icon("x")}</button>
+      <span class="ctx-line" hidden><i></i></span>`;
     this.tab.querySelector(".path")!.textContent = `\u200E${dirOf(opts)}\u200E`;
     this.tab.addEventListener("click", () => {
       if (!tabDrag.suppressClick) activate(this);
@@ -570,10 +574,27 @@ class Session {
       this.flagAttention("finished", shown?.title);
     }
     if (prev !== next && changesOpen() && this === active) scheduleChangesRefresh(300);
+    if (prev !== next) void this.refreshUsage();
   }
 
   get running() {
     return this.ptyId != null;
+  }
+
+  /** Reads the conversation's token usage and shows it if it changed. */
+  async refreshUsage() {
+    const id = this.opts.conversationId;
+    if (!id) return;
+    const u = await invoke<Usage | null>("conversation_usage", { cwd: dirOf(this.opts), id }).catch(() => null);
+    if (!u || JSON.stringify(u) === JSON.stringify(this.usage)) return;
+    this.usage = u;
+    renderUsage(this.el.querySelector<HTMLElement>(".usage")!, this);
+    const fill = usageFill(this);
+    const line = this.tab.querySelector<HTMLElement>(".ctx-line")!;
+    line.hidden = false;
+    line.dataset.level = fill.level;
+    line.querySelector("i")!.style.width = `${fill.pct}%`;
+    if (this === active) updateTopbar();
   }
 
   blockedKind(): string | undefined {
@@ -1070,6 +1091,7 @@ function updateTopbar() {
   st.textContent = stateLabel(active.state, active.state === "blocked" ? active.blockedKind() : undefined);
   st.hidden = !st.textContent;
   if (active.state) st.dataset.state = active.state;
+  renderUsage($("#tb-usage"), active);
   const br = $("#tb-branch");
   br.hidden = !active.branch;
   br.innerHTML = active.branch ? `${icon("branch")}<span></span>` : "";
@@ -1142,6 +1164,59 @@ function restoreWorkspace() {
   if (target) activate(target);
   saveWorkspace();
 }
+
+// ---------- token usage ----------
+
+interface Usage {
+  /** Tokens in the latest main-thread request: what the context holds now. */
+  context: number;
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+  requests: number;
+  model: string | null;
+}
+
+/** The context window: 1M when the model was chosen with the [1m] suffix, or once the
+ *  context has grown past 200K (it can't, otherwise); else the standard 200K. */
+function contextWindow(s: Session): number {
+  const asked = `${s.opts.model} ${s.opts.extra}`.toLowerCase().includes("[1m]");
+  return asked || (s.usage?.context ?? 0) > 200_000 ? 1_000_000 : 200_000;
+}
+
+function usageFill(s: Session) {
+  const pct = Math.min(100, ((s.usage?.context ?? 0) / contextWindow(s)) * 100);
+  return { pct, level: pct >= 90 ? "full" : pct >= 70 ? "high" : "ok" };
+}
+
+function fmtTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 10_000) return `${(n / 1000).toFixed(1)}K`;
+  if (n < 1_000_000) return `${Math.round(n / 1000)}K`;
+  return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;
+}
+
+/** Fills a `.usage` element: a small context gauge, the tokens in context, and the details on hover. */
+function renderUsage(el: HTMLElement, s: Session) {
+  const u = s.usage;
+  el.hidden = !u;
+  if (!u) return;
+  const { pct, level } = usageFill(s);
+  const n = (v: number) => v.toLocaleString();
+  el.dataset.level = level;
+  el.innerHTML = `<span class="meter"><i></i></span><span class="num"></span>`;
+  el.querySelector<HTMLElement>(".meter i")!.style.width = `${pct}%`;
+  el.querySelector(".num")!.textContent = fmtTokens(u.context);
+  el.title = [
+    `Context: ${n(u.context)} of ${fmtTokens(contextWindow(s))} tokens (${Math.round(pct)}%)`,
+    `This conversation: ${n(u.input + u.cacheRead + u.cacheWrite)} input tokens (${n(u.cacheRead)} read from cache), ${n(u.output)} output`,
+    `${u.requests} request${u.requests === 1 ? "" : "s"}${u.model ? ` · ${u.model}` : ""}`,
+  ].join("\n");
+}
+
+// Cheap to poll: only what Claude Code appended since the last read is parsed.
+setInterval(() => !document.hidden && sessions.forEach((s) => s.running && void s.refreshUsage()), 3000);
 
 // ---------- git branch ----------
 
