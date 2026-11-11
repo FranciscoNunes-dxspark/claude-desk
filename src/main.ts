@@ -1405,6 +1405,8 @@ function noteLimits(l: RateLimits) {
   renderLimits();
 }
 
+const limitLevel = (pct: number) => (pct >= 90 ? "full" : pct >= 70 ? "high" : "ok");
+
 function renderLimits() {
   const el = $("#limits");
   const now = Date.now() / 1000;
@@ -1417,8 +1419,8 @@ function renderLimits() {
     ...windows.map(([label, w]) => {
       const pct = Math.max(0, Math.min(100, w.used_percentage));
       const row = document.createElement("div");
-      row.className = "limit";
-      row.dataset.level = pct >= 90 ? "full" : pct >= 70 ? "high" : "ok";
+      row.className = `limit ${label === "Weekly" ? "week" : "five"}`;
+      row.dataset.level = limitLevel(pct);
       row.innerHTML = `<span class="l-name"></span><span class="meter"><i></i></span><span class="l-pct"></span>`;
       row.querySelector(".l-name")!.textContent = label;
       row.querySelector<HTMLElement>(".meter i")!.style.width = `${pct}%`;
@@ -1431,6 +1433,25 @@ function renderLimits() {
       return row;
     }),
   );
+  renderLimitRings(windows, el);
+}
+
+/** The collapsed sidebar's version: 5-hour as the outer ring, weekly inside it. */
+function renderLimitRings(windows: [string, LimitWindow][], rows: HTMLElement) {
+  const box = $("#limit-rings");
+  box.hidden = !windows.length;
+  for (const [label, cls] of [["5-hour", "five"], ["Weekly", "week"]] as const) {
+    const arc = box.querySelector<SVGCircleElement>(`.arc.${cls}`)!;
+    const w = windows.find(([l]) => l === label)?.[1];
+    const pct = w ? Math.max(0, Math.min(100, w.used_percentage)) : 0;
+    arc.style.display = pct > 0 ? "" : "none"; // a round cap would still draw a dot at 0
+    arc.style.strokeDasharray = `${pct} 100`;
+    arc.dataset.level = limitLevel(pct);
+  }
+  box.title = [...rows.children]
+    .map((r) => (r as HTMLElement).title)
+    .concat("Outer ring: 5-hour · inner ring: weekly")
+    .join("\n");
 }
 setInterval(renderLimits, 60_000); // drop a window once it has reset
 

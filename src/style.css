@@ -272,7 +272,6 @@ body.mac #sidebar { padding-top: 40px; }
 #tabs li:hover .icon-btn { display: grid; }
 #tabs li:hover kbd { display: none; }
 
-.limits:not([hidden]) + footer { border-top: 0; }
 #sidebar footer {
   display: flex;
   align-items: center;
@@ -1165,8 +1164,26 @@ body.sidebar-collapsed .ctx-line { left: 8px; right: 8px; bottom: 2px; }
 .limit { display: grid; grid-template-columns: 52px 1fr 34px; align-items: center; gap: 8px; cursor: default; }
 .limit .meter { position: relative; height: 4px; border-radius: 2px; background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--hairline); overflow: hidden; }
 .limit .meter i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--text-3); transition: width .3s ease-out; }
+/* Same colours as the collapsed sidebar's rings, so the two read as one. */
+.limit.five .meter i { background: var(--ring-five); }
+.limit.week .meter i { background: var(--ring-week); }
 .limit .l-pct { text-align: right; font-variant-numeric: tabular-nums; }
 .limit[data-level="high"] .meter i { background: var(--st-working); }
 .limit[data-level="high"] .l-pct { color: var(--st-working); }
 .limit[data-level="full"] .meter i { background: var(--accent); }
 .limit[data-level="full"] .l-pct { color: var(--accent-hi); }
+
+/* Collapsed sidebar: the plan limits as two rings, 5-hour outside, weekly inside. */
+:root { --ring-five: #7aa6da; --ring-week: #c397d8; }
+:root[data-theme="light"] { --ring-five: #3b6ea8; --ring-week: #8a55a6; }
+.limit-rings { display: none; }
+body.sidebar-collapsed .limit-rings:not([hidden]) { display: grid; place-items: center; padding: 10px 0 2px; cursor: default; }
+.limit-rings svg { width: 32px; height: 32px; transform: rotate(-90deg); }
+.limit-rings circle { fill: none; stroke-width: 3.5; }
+.limit-rings .track { stroke: var(--surface-3); }
+.limit-rings .arc { stroke-linecap: round; transition: stroke-dasharray .4s ease-out; }
+.limit-rings .arc.five { stroke: var(--ring-five); }
+.limit-rings .arc.week { stroke: var(--ring-week); }
+.limit-rings .arc[data-level="high"] { stroke: var(--st-working); }
+.limit-rings .arc[data-level="full"] { stroke: var(--accent); }
+body.sidebar-collapsed .limit-rings:not([hidden]) { border-top: 1px solid var(--hairline); width: 100%; }
