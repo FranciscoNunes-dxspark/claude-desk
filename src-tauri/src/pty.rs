@@ -173,6 +173,21 @@ fn augmented_path() -> String {
     parts.join(sep)
 }
 
+/// The `claude.exe` that cmd.exe would run for `claude` with this PATH, or `None` when
+/// the first match is something else (npm's claude.cmd) that needs cmd.exe to run.
+fn find_windows_exe(path: &str, exists: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+    for dir in std::env::split_paths(path) {
+        // PATHEXT's usual order: .COM, .EXE, .BAT, .CMD.
+        for ext in ["com", "exe", "bat", "cmd"] {
+            let candidate = dir.join(format!("claude.{ext}"));
+            if exists(&candidate) {
+                return (ext == "exe").then_some(candidate);
+            }
+        }
+    }
+    None
+}
+
 /// Returns (program, argv) that launches claude with `args`.
 /// With an explicit binary we exec it directly. Otherwise we go through the
 /// user's login shell so their PATH (nvm, asdf, ...) is honoured.
@@ -181,7 +196,13 @@ fn launch_spec(binary: Option<&str>, args: &[String]) -> (String, Vec<String>) {
         return (bin.trim().to_string(), args.to_vec());
     }
     if cfg!(windows) {
-        let mut argv = vec!["/C".to_string(), "claude".to_string()];
+        // The native claude.exe is started directly. Going through cmd.exe costs a
+        // process, and cmd.exe first runs its AutoRun commands (conda, clink, ...),
+        // which can take seconds; that's skipped with /D for npm's claude.cmd.
+        if let Some(exe) = find_windows_exe(&augmented_path(), |p| p.is_file()) {
+            return (exe.to_string_lossy().into_owned(), args.to_vec());
+        }
+        let mut argv = vec!["/D".to_string(), "/C".to_string(), "claude".to_string()];
         argv.extend_from_slice(args);
         return ("cmd.exe".to_string(), argv);
     }
@@ -381,6 +402,27 @@ pub async fn claude_version(binary: Option<String>) -> Result<String, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::*;
+
+    #[test]
+    fn finds_claude_exe_like_cmd_would() {
+        let dirs = ["/a", "/native", "/npm"].map(PathBuf::from);
+        let path = std::env::join_paths(&dirs).unwrap().into_string().unwrap();
+        let native = Path::new("/native/claude.exe");
+        let npm = Path::new("/npm/claude.cmd");
+        // The native install comes first on PATH: run it directly.
+        assert_eq!(find_windows_exe(&path, |p| p == native || p == npm), Some(native.to_path_buf()));
+        // Only npm's shim: it needs cmd.exe.
+        assert_eq!(find_windows_exe(&path, |p| p == npm), None);
+        // A shim earlier on PATH wins, as it would in cmd.exe.
+        let early = Path::new("/a/claude.cmd");
+        assert_eq!(find_windows_exe(&path, |p| p == early || p == native), None);
+        assert_eq!(find_windows_exe(&path, |_| false), None);
+    }
 }
 
 #[cfg(all(test, unix))]
