@@ -43,8 +43,8 @@
       </button>
       <div class="section-label">Sessions <span id="tab-count"></span></div>
       <ul id="tabs"></ul>
-      <div id="limits" class="limits" hidden></div>
-      <div id="limit-rings" class="limit-rings" hidden>
+      <div id="limits" class="limits" tabindex="0" aria-label="Plan usage limits" aria-describedby="limit-pop" hidden></div>
+      <div id="limit-rings" class="limit-rings" tabindex="0" aria-label="Plan usage limits" aria-describedby="limit-pop" hidden>
         <svg viewBox="0 0 32 32" aria-hidden="true">
           <circle class="track" cx="16" cy="16" r="13" />
           <circle class="track" cx="16" cy="16" r="8" />
@@ -65,16 +65,9 @@
     </aside>
 
     <main id="main">
+      <div id="drag-strip" class="drag-strip" data-tauri-drag-region hidden></div>
       <div id="topbar" data-tauri-drag-region hidden>
-        <div class="crumb" data-tauri-drag-region>
-          <span id="tb-name" class="tb-name"></span>
-          <span id="tb-path" class="tb-path"></span>
-          <span id="tb-branch" class="branch" hidden></span>
-          <span id="tb-state" class="state-label" hidden></span>
-          <span id="tb-usage" class="usage" hidden></span>
-        </div>
-        <span id="tb-split-label" class="tb-split-label"></span>
-        <div id="tb-chips" class="chips-row"></div>
+        <span id="tb-split-label" class="tb-split-label" data-tauri-drag-region></span>
         <button id="tb-broadcast" class="icon-btn" title="Broadcast a prompt"><svg class="ic"><use href="#i-broadcast" /></svg></button>
         <button id="tb-changes" class="icon-btn" title="Changes"><svg class="ic"><use href="#i-diff" /></svg></button>
         <button id="tb-search" class="icon-btn" title="Search terminal"><svg class="ic"><use href="#i-search" /></svg></button>
@@ -83,14 +76,6 @@
           <button data-layout="columns" title="Side by side"><svg class="ic"><use href="#i-l-columns" /></svg></button>
           <button data-layout="rows" title="Stacked"><svg class="ic"><use href="#i-l-rows" /></svg></button>
           <button data-layout="grid" title="Grid"><svg class="ic"><use href="#i-l-grid" /></svg></button>
-        </div>
-        <div class="tb-actions">
-          <button id="tb-restart" class="icon-btn" title="Restart session">
-            <svg class="ic"><use href="#i-restart" /></svg>
-          </button>
-          <button id="tb-close" class="icon-btn" title="Close session">
-            <svg class="ic"><use href="#i-x" /></svg>
-          </button>
         </div>
       </div>
 
@@ -322,5 +307,12 @@
     </div>
 
     <script type="module" src="/src/main.ts"></script>
+      <div id="drop-hint" class="drop-hint" hidden></div>
+    <div id="win-controls" class="win-controls" hidden>
+      <button type="button" data-win="min" aria-label="Minimise" title="Minimise"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0 5.5h10" /></svg></button>
+      <button type="button" data-win="max" aria-label="Maximise" title="Maximise"><svg viewBox="0 0 10 10" aria-hidden="true"><path class="w-max" d="M.5 .5h9v9h-9z" /><path class="w-restore" d="M.5 2.5h7v7h-7zM2.5 2.5V.5h7v7h-2" /></svg></button>
+      <button type="button" data-win="close" class="w-close" aria-label="Close" title="Close"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M.5 .5l9 9M9.5 .5l-9 9" /></svg></button>
+    </div>
+    <div id="limit-pop" class="limit-pop" role="tooltip" hidden></div>
   </body>
 </html>

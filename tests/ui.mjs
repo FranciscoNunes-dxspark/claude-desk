@@ -16,6 +16,7 @@ function fakeBackend() {
   let nextPty = 0;
   window.__calls = [];
   window.__ch = {};
+  window.__listeners = {};
   window.__opt = { spawnDelay: 0, writeFails: false, dialogAnswer: "End session" };
   window.__TAURI_INTERNALS__ = {
     metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main", windowLabel: "main" } },
@@ -36,6 +37,10 @@ function fakeBackend() {
         call.push(id);
         return id;
       }
+      if (cmd === "plugin:event|listen") {
+        (window.__listeners[args.event] ??= []).push(args.handler);
+        return nextCb++;
+      }
       if (cmd === "pty_write" && window.__opt.writeFails) throw "session not found";
       if (cmd === "plugin:dialog|message") return window.__opt.dialogAnswer;
       if (cmd === "claude_version") return "2.0.0 (Claude Code)";
@@ -49,6 +54,13 @@ function fakeBackend() {
     c.data({ index: c.i++, message: Array.from(new TextEncoder().encode(text)) });
   };
   window.__exit = (id, code = 0) => window.__ch[id].exit({ index: 0, message: { code } });
+  // A drag from the OS, as Tauri reports it: positions in physical pixels.
+  window.__drag = (kind, x, y, paths = ["/tmp/report.pdf"]) => {
+    const r = devicePixelRatio;
+    for (const h of window.__listeners[`tauri://drag-${kind}`] ?? []) {
+      cbs[h]({ event: `tauri://drag-${kind}`, id: 0, payload: { paths, position: { x: x * r, y: y * r } } });
+    }
+  };
   window.__count = (cmd) => window.__calls.filter((c) => c[0] === cmd).length;
   window.__acked = (id) => window.__calls.filter((c) => c[0] === "pty_ack" && (id == null || c[1] === id)).reduce((a, c) => a + c[2], 0);
   const sessions = (window.__sessions ?? ["a"]).map((x) => ({ cwd: `/w/${x}`, conversationId: x, model: "", permissionMode: "", conversation: "new", extra: "" }));
@@ -78,7 +90,7 @@ const scenarios = {
     await p.evaluate(() => { window.__opt.spawnDelay = 300; window.__calls = []; });
     await p.click(".banner .btn.primary");
     await p.waitForTimeout(50);
-    await p.click("#tb-close");
+    await p.click('.term.active [data-act="close"]');
     await p.waitForTimeout(600);
     const calls = await p.evaluate(() => window.__calls);
     const spawned = calls.find((c) => c[0] === "pty_spawn")?.[3];
@@ -144,6 +156,27 @@ const scenarios = {
     const acked = await p.evaluate(() => window.__acked(2));
     return [acked > 80000 && errors.length === 0, `${acked} bytes processed after the bell, ${errors.length} page errors`];
   }],
+  "a dropped file goes to the session under the pointer": [3, async (p) => {
+    await p.evaluate(() => document.querySelector('#layout-switch [data-layout="columns"]').click());
+    await p.waitForTimeout(400);
+    const centre = (sel) => p.evaluate((sel) => {
+      const r = document.querySelector(sel).getBoundingClientRect();
+      return [r.left + r.width / 2, r.top + r.height / 2];
+    }, sel);
+    const [x3, y3] = await centre(".term:nth-of-type(3)");
+    await p.evaluate(([x, y]) => { window.__calls = []; window.__drag("enter", x, y); window.__drag("over", x, y); }, [x3, y3]);
+    const hint = await p.evaluate(() => ({ text: document.querySelector("#drop-hint").textContent, shown: !document.querySelector("#drop-hint").hidden }));
+    await p.evaluate(([x, y]) => window.__drag("drop", x, y), [x3, y3]);
+    await p.waitForTimeout(100);
+    // Then onto the first session's tab in the sidebar.
+    const [xt, yt] = await centre("#tabs li:nth-child(1)");
+    await p.evaluate(([x, y]) => { window.__drag("enter", x, y); window.__drag("drop", x, y, ["/tmp/a b.txt"]); }, [xt, yt]);
+    await p.waitForTimeout(100);
+    const writes = await p.evaluate(() => window.__calls.filter((c) => c[0] === "pty_write").map((c) => [c[1], c[2]]));
+    const ok = hint.shown && hint.text.includes("“c”") && writes[0]?.[0] === 3 && writes[0]?.[1].includes("/tmp/report.pdf")
+      && writes[1]?.[0] === 1 && writes[1]?.[1].includes("'/tmp/a b.txt'");
+    return [ok, `hint ${JSON.stringify(hint.text)}; writes ${JSON.stringify(writes)}`];
+  }],
   "keyboard focus returns to the terminal after a dialog": [1, async (p) => {
     await p.click("#palette-btn");
     await p.keyboard.press("Escape");
@@ -162,7 +195,7 @@ const scenarios = {
     return [n === 3, `${n} of 3 sessions open`];
   }],
   "closing asks once, even on a double click": [3, async (p) => {
-    await p.evaluate(() => { window.__calls = []; document.querySelector("#tb-close").click(); document.querySelector("#tb-close").click(); });
+    await p.evaluate(() => { window.__calls = []; const x = document.querySelector('.term.active [data-act="close"]'); x.click(); x.click(); });
     await p.waitForTimeout(500);
     const [n, asked] = [await tabs(p), await p.evaluate(() => window.__count("plugin:dialog|message"))];
     return [n === 2 && asked === 1, `${n} sessions left, asked ${asked}x`];
@@ -170,9 +203,9 @@ const scenarios = {
   "the close button keeps working after search": [3, async (p) => {
     await p.click("#tb-search");
     await p.keyboard.press("Escape");
-    await p.click("#tb-close");
+    await p.click('.term.active [data-act="close"]');
     await p.waitForTimeout(400);
-    await p.click("#tb-close");
+    await p.click('.term.active [data-act="close"]');
     await p.waitForTimeout(400);
     const n = await tabs(p);
     return [n === 1, `${n} sessions left of 3 after two closes`];

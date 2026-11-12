@@ -393,7 +393,7 @@ class Session {
     this.el = document.createElement("div");
     this.el.className = "term";
     this.el.innerHTML = `
-      <div class="pane-head" title="Double-click to maximise">
+      <div class="pane-head">
         <span class="dot"></span>
         <span class="pane-name"></span>
         <span class="pane-path"></span>
@@ -1061,6 +1061,7 @@ function applyLayout() {
     const last = i === n - 1;
     x.el.style.gridColumn = split && !zoomed && layout === "grid" && last ? `${(i % gridCols) + 1} / -1` : "";
     x.el.classList.toggle("zoomed", x === zoomed);
+    x.el.querySelector<HTMLElement>(".pane-head")!.title = split ? "Double-click to maximise" : "";
     const zb = x.el.querySelector<HTMLButtonElement>('[data-act="zoom"]')!;
     zb.innerHTML = icon(x === zoomed ? "restore" : "max");
     zb.title = x === zoomed ? "Restore layout" : "Maximise";
@@ -1207,27 +1208,17 @@ function chipsFor(o: LaunchOptions): HTMLSpanElement[] {
 
 function updateTopbar() {
   $("#topbar").hidden = !active;
+  // With no session there's no top bar to drag the window by: a strip stands in.
+  $("#drag-strip").hidden = !isWindows || !!active;
   sessions.forEach((x, i) => {
     x.tab.querySelector("kbd")!.textContent = i < 9 ? (isMac ? `⌘${i + 1}` : `${i + 1}`) : "";
   });
   $("#tab-count").textContent = sessions.length ? String(sessions.length) : "";
-  if (!active) return;
-  const o = active.opts;
-  $("#tb-name").textContent = displayName(o);
-  $("#tb-path").textContent = dirOf(o);
-  const st = $("#tb-state");
-  st.textContent = stateLabel(active.state, active.state === "blocked" ? active.blockedKind() : undefined);
-  st.hidden = !st.textContent;
-  if (active.state) st.dataset.state = active.state;
-  renderUsage($("#tb-usage"), active);
-  const br = $("#tb-branch");
-  br.hidden = !active.branch;
-  br.innerHTML = active.branch ? `${icon("branch")}<span></span>` : "";
-  if (active.branch) br.querySelector("span")!.textContent = active.branch;
-  $("#tb-chips").replaceChildren(...chipsFor(o));
+  // The session's own details and actions are on its pane's header row.
+  const count = `${sessions.length} session${sessions.length === 1 ? "" : "s"}`;
   $("#tb-split-label").textContent = zoomed
-    ? `${displayName(zoomed.opts)} maximised · ${sessions.length} sessions`
-    : `${sessions.length} sessions · ${LAYOUT_NAMES[layout]}`;
+    ? `${displayName(zoomed.opts)} maximised · ${count}`
+    : `${count} · ${LAYOUT_NAMES[layout]}`;
 }
 
 /** Sessions waiting on "End the session?", so a second click doesn't ask twice. */
@@ -1399,60 +1390,154 @@ function renderUsage(el: HTMLElement, s: Session) {
 // they're the account's, so the sidebar shows the latest any session reported.
 
 let limits: RateLimits | null = null;
+/** When Claude Code last reported the limits (ms). */
+let limitsAt = 0;
 
 function noteLimits(l: RateLimits) {
   limits = l;
+  limitsAt = Date.now();
   renderLimits();
+}
+
+type LimitRow = { label: string; cls: "five" | "week"; pct: number; resetsAt: number };
+
+/** The limit windows to show: those Claude Code reported and that haven't reset yet. */
+function limitRows(): LimitRow[] {
+  const now = Date.now() / 1000;
+  const rows: LimitRow[] = [];
+  for (const [label, cls, w] of [["5-hour", "five", limits?.five_hour], ["Weekly", "week", limits?.seven_day]] as const) {
+    if (w && w.resets_at > now) rows.push({ label, cls, pct: Math.max(0, Math.min(100, w.used_percentage)), resetsAt: w.resets_at });
+  }
+  return rows;
+}
+
+/** "in 2 h 5 min" / "in 2 d 21 h" until `at` (s), and the clock time: "11:25", "tomorrow 09:25", "Sat 09:25". */
+function resetWhen(at: number): { left: string; clock: string } {
+  const secs = Math.max(0, at - Date.now() / 1000);
+  const left =
+    secs < 3600
+      ? `${Math.max(1, Math.round(secs / 60))} min`
+      : secs < 86400
+        ? `${Math.floor(secs / 3600)} h ${Math.floor((secs % 3600) / 60)} min`
+        : `${Math.floor(secs / 86400)} d ${Math.floor((secs % 86400) / 3600)} h`;
+  const d = new Date(at * 1000);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const tomorrow = new Date(Date.now() + 86400_000).toDateString();
+  const clock =
+    d.toDateString() === new Date().toDateString()
+      ? time
+      : d.toDateString() === tomorrow
+        ? `tomorrow ${time}`
+        : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+  return { left: `in ${left}`, clock };
 }
 
 const limitLevel = (pct: number) => (pct >= 90 ? "full" : pct >= 70 ? "high" : "ok");
 
 function renderLimits() {
   const el = $("#limits");
-  const now = Date.now() / 1000;
-  const windows: [string, LimitWindow][] = [];
-  for (const [label, w] of [["5-hour", limits?.five_hour], ["Weekly", limits?.seven_day]] as const) {
-    if (w && w.resets_at > now) windows.push([label, w]);
-  }
-  el.hidden = !windows.length;
+  const rows = limitRows();
+  el.hidden = !rows.length;
   el.replaceChildren(
-    ...windows.map(([label, w]) => {
-      const pct = Math.max(0, Math.min(100, w.used_percentage));
+    ...rows.map((r) => {
       const row = document.createElement("div");
-      row.className = `limit ${label === "Weekly" ? "week" : "five"}`;
-      row.dataset.level = limitLevel(pct);
+      row.className = `limit ${r.cls}`;
+      row.dataset.level = limitLevel(r.pct);
       row.innerHTML = `<span class="l-name"></span><span class="meter"><i></i></span><span class="l-pct"></span>`;
-      row.querySelector(".l-name")!.textContent = label;
-      row.querySelector<HTMLElement>(".meter i")!.style.width = `${pct}%`;
-      row.querySelector(".l-pct")!.textContent = `${Math.round(pct)}%`;
-      const reset = new Date(w.resets_at * 1000);
-      const when = reset.toDateString() === new Date().toDateString()
-        ? reset.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-        : reset.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
-      row.title = `${label} plan usage limit: ${Math.round(pct)}% used · resets ${when}`;
+      row.querySelector(".l-name")!.textContent = r.label;
+      row.querySelector<HTMLElement>(".meter i")!.style.width = `${r.pct}%`;
+      row.querySelector(".l-pct")!.textContent = `${Math.round(r.pct)}%`;
       return row;
     }),
   );
-  renderLimitRings(windows, el);
-}
-
-/** The collapsed sidebar's version: 5-hour as the outer ring, weekly inside it. */
-function renderLimitRings(windows: [string, LimitWindow][], rows: HTMLElement) {
+  // The collapsed sidebar's version: 5-hour as the outer ring, weekly inside it.
   const box = $("#limit-rings");
-  box.hidden = !windows.length;
-  for (const [label, cls] of [["5-hour", "five"], ["Weekly", "week"]] as const) {
+  box.hidden = !rows.length;
+  for (const cls of ["five", "week"] as const) {
     const arc = box.querySelector<SVGCircleElement>(`.arc.${cls}`)!;
-    const w = windows.find(([l]) => l === label)?.[1];
-    const pct = w ? Math.max(0, Math.min(100, w.used_percentage)) : 0;
+    const pct = rows.find((r) => r.cls === cls)?.pct ?? 0;
     arc.style.display = pct > 0 ? "" : "none"; // a round cap would still draw a dot at 0
     arc.style.strokeDasharray = `${pct} 100`;
     arc.dataset.level = limitLevel(pct);
   }
-  box.title = [...rows.children]
-    .map((r) => (r as HTMLElement).title)
-    .concat("Outer ring: 5-hour · inner ring: weekly")
-    .join("\n");
+  if (limitPopFor) {
+    if (rows.length) renderLimitPop();
+    else closeLimitPop();
+  }
 }
+
+// ---------- plan limits: details card ----------
+// Hovering or focusing the limits (rings or bars) opens a card with each limit's use,
+// when it resets, and how fresh the numbers are.
+
+const limitPop = $("#limit-pop");
+let limitPopFor: HTMLElement | null = null;
+let limitPopClose = 0;
+
+function renderLimitPop() {
+  const anchor = limitPopFor;
+  if (!anchor) return;
+  const rows = limitRows();
+  const ago = Math.round((Date.now() - limitsAt) / 60000);
+  limitPop.innerHTML = `<div class="lp-head">Plan usage</div>`;
+  for (const r of rows) {
+    const { left, clock } = resetWhen(r.resetsAt);
+    const row = document.createElement("div");
+    row.className = `lp-row ${r.cls}`;
+    row.dataset.level = limitLevel(r.pct);
+    row.innerHTML = `<svg class="lp-ring" viewBox="0 0 20 20" aria-hidden="true"><circle class="track" cx="10" cy="10" r="7" /><circle class="arc" cx="10" cy="10" r="7" pathLength="100" /></svg>
+      <div class="lp-main"><div class="lp-top"><span class="lp-name"></span><span class="lp-pct"></span></div>
+      <div class="lp-bar"><i></i></div><div class="lp-reset"></div></div>`;
+    row.querySelector(".lp-name")!.textContent = `${r.label} limit`;
+    row.querySelector(".lp-pct")!.textContent = `${Math.round(r.pct)}% used`;
+    row.querySelector<SVGCircleElement>(".arc")!.style.strokeDasharray = `${r.pct} 100`;
+    row.querySelector<HTMLElement>(".lp-bar i")!.style.width = `${r.pct}%`;
+    row.querySelector(".lp-reset")!.textContent = `Resets ${left} · ${clock}`;
+    limitPop.appendChild(row);
+  }
+  const foot = document.createElement("div");
+  foot.className = "lp-foot";
+  foot.textContent = ago < 1 ? "Updated just now" : `Updated ${ago} min ago`;
+  if (anchor.id === "limit-rings") {
+    const legend = document.createElement("div");
+    legend.textContent = "Outer ring 5-hour · inner ring weekly";
+    foot.prepend(legend);
+  }
+  limitPop.appendChild(foot);
+  // Beside the anchor, vertically centred on it and kept inside the window.
+  limitPop.hidden = false;
+  const a = anchor.getBoundingClientRect();
+  const h = limitPop.offsetHeight;
+  limitPop.style.left = `${Math.round(a.right + 10)}px`;
+  limitPop.style.top = `${Math.round(Math.max(8, Math.min(innerHeight - h - 8, a.top + a.height / 2 - h / 2)))}px`;
+}
+
+function openLimitPop(anchor: HTMLElement) {
+  clearTimeout(limitPopClose);
+  if (!limitRows().length) return;
+  limitPopFor = anchor;
+  renderLimitPop();
+}
+
+function closeLimitPop() {
+  clearTimeout(limitPopClose);
+  limitPopFor = null;
+  limitPop.hidden = true;
+}
+
+for (const anchor of [$("#limits"), $("#limit-rings")]) {
+  anchor.addEventListener("mouseenter", () => openLimitPop(anchor));
+  anchor.addEventListener("focus", () => openLimitPop(anchor));
+  // A short grace period lets the pointer travel onto the card without it closing.
+  anchor.addEventListener("mouseleave", () => (limitPopClose = window.setTimeout(closeLimitPop, 150)));
+  anchor.addEventListener("blur", closeLimitPop);
+  anchor.addEventListener("keydown", (e) => e.key === "Escape" && closeLimitPop());
+}
+limitPop.addEventListener("mouseenter", () => clearTimeout(limitPopClose));
+limitPop.addEventListener("mouseleave", closeLimitPop);
+// Keep the times current while it's open.
+setInterval(() => limitPopFor && renderLimitPop(), 30_000);
+
 setInterval(renderLimits, 60_000); // drop a window once it has reset
 
 // Cheap to poll: a small status file, and only what Claude Code appended to the
@@ -2531,14 +2616,67 @@ for (const dlg of document.querySelectorAll("dialog")) {
 
 // ---------- drag & drop ----------
 
+// Dropped files go to the session under the pointer: its pane (any layout) or its tab
+// in the sidebar; elsewhere, the active session. A running session gets the paths
+// typed in, like a terminal does; with none running there, the drop opens a new
+// session in that folder. While dragging, an outline shows where the drop will land.
+
+const dropHint = $("#drop-hint");
+let dragCount = 0;
+let dropTab: HTMLElement | null = null;
+
+/** The session a drop at (x, y) in page pixels goes to. */
+function dropTargetAt(x: number, y: number): Session | null {
+  const el = document.elementFromPoint(x, y);
+  const pane = el?.closest(".term");
+  const tab = el?.closest("#tabs li");
+  return sessions.find((s) => s.el === pane || s.tab === tab) ?? active;
+}
+
+function showDropHint(x: number, y: number) {
+  const s = dropTargetAt(x, y);
+  // Over the pane if it's on screen; otherwise (a background tab's session) over the
+  // whole session area, which is where it will show once the drop switches to it.
+  const visible = !!s && s.el.offsetParent !== null;
+  const area = visible ? s.el : $("#terminals");
+  // A session that isn't on screen: cover what is, so it's clear where the drop goes.
+  dropHint.classList.toggle("elsewhere", !visible);
+  const r = area.getBoundingClientRect();
+  Object.assign(dropHint.style, { left: `${r.left + 6}px`, top: `${r.top + 6}px`, width: `${r.width - 12}px`, height: `${r.height - 12}px` });
+  const paths = dragCount === 1 ? "the path" : `${dragCount} paths`;
+  dropHint.textContent =
+    s?.running
+      ? `Insert ${paths} into “${displayName(s.opts)}”${visible ? "" : " (switches to it)"}`
+      : "Drop to open a new session in this folder";
+  dropHint.hidden = false;
+  const tab = s?.running ? s.tab : null;
+  if (dropTab !== tab) {
+    dropTab?.classList.remove("drop-target");
+    tab?.classList.add("drop-target");
+    dropTab = tab;
+  }
+}
+
+function hideDropHint() {
+  dropHint.hidden = true;
+  dropTab?.classList.remove("drop-target");
+  dropTab = null;
+}
+
 void getCurrentWebview().onDragDropEvent((ev) => {
   const p = ev.payload;
-  document.body.classList.toggle("dragging", p.type === "enter" || p.type === "over");
-  if (p.type !== "drop" || p.paths.length === 0) return;
-  if (active?.running) {
-    // Dropping files into a session inserts their paths, like a terminal does.
-    active.write(p.paths.map(shellQuote).join(" ") + " ");
-    active.term.focus();
+  if (p.type === "leave") return hideDropHint();
+  if (p.type === "enter") dragCount = p.paths.length;
+  // Tauri reports the pointer in physical pixels.
+  const { x, y } = p.position.toLogical(devicePixelRatio);
+  if (p.type !== "drop") return showDropHint(x, y);
+  hideDropHint();
+  if (p.paths.length === 0) return;
+  const target = dropTargetAt(x, y);
+  if (target?.running) {
+    if (target !== active) activate(target);
+    target.write(p.paths.map(shellQuote).join(" ") + " ");
+    target.term.focus();
   } else {
     openNewDialog(p.paths[0]);
   }
@@ -2562,8 +2700,6 @@ $("#empty-open").addEventListener("click", async () => {
 $("#settings-btn").addEventListener("click", openSettings);
 $("#new-kbd").textContent = isMac ? "⌘T" : "Ctrl⇧T";
 $("#empty-new").addEventListener("click", () => openNewDialog());
-$("#tb-restart").addEventListener("click", () => active?.restart());
-$("#tb-close").addEventListener("click", () => active && closeSession(active));
 $("#tb-search").title = `Search terminal (${isMac ? "⌘F" : "Ctrl+Shift+F"})`;
 {
   const mod = isMac ? "⌘" : "Ctrl+Shift+";
@@ -2589,6 +2725,32 @@ for (const b of document.querySelectorAll<HTMLButtonElement>("#layout-switch but
 
 for (const btn of document.querySelectorAll<HTMLButtonElement>("dialog .cancel")) {
   btn.addEventListener("click", () => btn.closest("dialog")!.close("cancel"));
+}
+
+// ---------- window buttons (Windows) ----------
+// There the window has no system frame (src-tauri/src/lib.rs), so the app draws its
+// own minimise, maximise/restore and close buttons at the top right. macOS and Linux
+// keep their native ones.
+
+if (isWindows) {
+  document.body.classList.add("custom-titlebar");
+  const controls = $("#win-controls");
+  controls.hidden = false;
+  const win = getCurrentWindow();
+  const maxBtn = controls.querySelector<HTMLButtonElement>('[data-win="max"]')!;
+  const syncMaximized = async () => {
+    const max = await win.isMaximized().catch(() => false);
+    controls.classList.toggle("maximized", max);
+    maxBtn.title = maxBtn.ariaLabel = max ? "Restore" : "Maximise";
+  };
+  controls.addEventListener("click", (e) => {
+    const act = (e.target as HTMLElement).closest<HTMLButtonElement>("button")?.dataset.win;
+    if (act === "min") void win.minimize().catch(() => {});
+    else if (act === "max") void win.toggleMaximize().catch(() => {});
+    else if (act === "close") void win.close().catch(() => {});
+  });
+  void win.onResized(() => void syncMaximized());
+  void syncMaximized();
 }
 
 // ---------- collapsible sidebar ----------
