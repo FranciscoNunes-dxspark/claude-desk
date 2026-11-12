@@ -5,8 +5,11 @@
 ; Switchyard beside it, and the old shortcuts would keep opening the old copy. Once
 ; Switchyard is installed, remove what the Claude Desk installer left behind.
 ;
-; Settings, open sessions and history are kept: they live under the app's identifier
-; (com.dxspark.claudedesk), which didn't change, so nothing here touches app data.
+; Later the program file was renamed too (claude-desk.exe → switchyard.exe); the update
+; installs the new one beside the old, so the old file is removed as well.
+;
+; Nothing here touches app data: the app itself carries its data over from the old
+; identifier on first launch (src-tauri/src/migrate.rs).
 
 !include LogicLib.nsh
 
@@ -45,4 +48,6 @@
   Delete "$SMPROGRAMS\${SWITCHYARD_OLD_NAME}.lnk"
   Delete "$SMPROGRAMS\$AppStartMenuFolder\${SWITCHYARD_OLD_NAME}.lnk"
   Delete "$DESKTOP\${SWITCHYARD_OLD_NAME}.lnk"
+  ; The program under its old name, left beside switchyard.exe by an update.
+  Delete "$INSTDIR\claude-desk.exe"
 !macroend

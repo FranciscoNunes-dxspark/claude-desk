@@ -1,9 +1,12 @@
 mod extras;
 mod git;
+mod migrate;
 mod pty;
 mod usage;
 
 pub fn run() {
+    // Before any web view exists: bring over the data kept under the old identifier.
+    migrate::from_old_identifier();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())

@@ -8,7 +8,7 @@ import { basename, join } from "node:path";
 
 const [version, folder] = process.argv.slice(2);
 if (!version || !folder) throw new Error("usage: latest-json.mjs <version> <folder>");
-const repo = process.env.GITHUB_REPOSITORY || "FranciscoNunes-dxspark/claude-desk";
+const repo = process.env.GITHUB_REPOSITORY || "FranciscoNunes-dxspark/switchyard";
 
 const filesIn = (dir) =>
   readdirSync(dir).flatMap((name) => {
