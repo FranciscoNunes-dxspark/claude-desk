@@ -1399,60 +1399,154 @@ function renderUsage(el: HTMLElement, s: Session) {
 // they're the account's, so the sidebar shows the latest any session reported.
 
 let limits: RateLimits | null = null;
+/** When Claude Code last reported the limits (ms). */
+let limitsAt = 0;
 
 function noteLimits(l: RateLimits) {
   limits = l;
+  limitsAt = Date.now();
   renderLimits();
+}
+
+type LimitRow = { label: string; cls: "five" | "week"; pct: number; resetsAt: number };
+
+/** The limit windows to show: those Claude Code reported and that haven't reset yet. */
+function limitRows(): LimitRow[] {
+  const now = Date.now() / 1000;
+  const rows: LimitRow[] = [];
+  for (const [label, cls, w] of [["5-hour", "five", limits?.five_hour], ["Weekly", "week", limits?.seven_day]] as const) {
+    if (w && w.resets_at > now) rows.push({ label, cls, pct: Math.max(0, Math.min(100, w.used_percentage)), resetsAt: w.resets_at });
+  }
+  return rows;
+}
+
+/** "in 2 h 5 min" / "in 2 d 21 h" until `at` (s), and the clock time: "11:25", "tomorrow 09:25", "Sat 09:25". */
+function resetWhen(at: number): { left: string; clock: string } {
+  const secs = Math.max(0, at - Date.now() / 1000);
+  const left =
+    secs < 3600
+      ? `${Math.max(1, Math.round(secs / 60))} min`
+      : secs < 86400
+        ? `${Math.floor(secs / 3600)} h ${Math.floor((secs % 3600) / 60)} min`
+        : `${Math.floor(secs / 86400)} d ${Math.floor((secs % 86400) / 3600)} h`;
+  const d = new Date(at * 1000);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const tomorrow = new Date(Date.now() + 86400_000).toDateString();
+  const clock =
+    d.toDateString() === new Date().toDateString()
+      ? time
+      : d.toDateString() === tomorrow
+        ? `tomorrow ${time}`
+        : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+  return { left: `in ${left}`, clock };
 }
 
 const limitLevel = (pct: number) => (pct >= 90 ? "full" : pct >= 70 ? "high" : "ok");
 
 function renderLimits() {
   const el = $("#limits");
-  const now = Date.now() / 1000;
-  const windows: [string, LimitWindow][] = [];
-  for (const [label, w] of [["5-hour", limits?.five_hour], ["Weekly", limits?.seven_day]] as const) {
-    if (w && w.resets_at > now) windows.push([label, w]);
-  }
-  el.hidden = !windows.length;
+  const rows = limitRows();
+  el.hidden = !rows.length;
   el.replaceChildren(
-    ...windows.map(([label, w]) => {
-      const pct = Math.max(0, Math.min(100, w.used_percentage));
+    ...rows.map((r) => {
       const row = document.createElement("div");
-      row.className = `limit ${label === "Weekly" ? "week" : "five"}`;
-      row.dataset.level = limitLevel(pct);
+      row.className = `limit ${r.cls}`;
+      row.dataset.level = limitLevel(r.pct);
       row.innerHTML = `<span class="l-name"></span><span class="meter"><i></i></span><span class="l-pct"></span>`;
-      row.querySelector(".l-name")!.textContent = label;
-      row.querySelector<HTMLElement>(".meter i")!.style.width = `${pct}%`;
-      row.querySelector(".l-pct")!.textContent = `${Math.round(pct)}%`;
-      const reset = new Date(w.resets_at * 1000);
-      const when = reset.toDateString() === new Date().toDateString()
-        ? reset.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-        : reset.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
-      row.title = `${label} plan usage limit: ${Math.round(pct)}% used · resets ${when}`;
+      row.querySelector(".l-name")!.textContent = r.label;
+      row.querySelector<HTMLElement>(".meter i")!.style.width = `${r.pct}%`;
+      row.querySelector(".l-pct")!.textContent = `${Math.round(r.pct)}%`;
       return row;
     }),
   );
-  renderLimitRings(windows, el);
-}
-
-/** The collapsed sidebar's version: 5-hour as the outer ring, weekly inside it. */
-function renderLimitRings(windows: [string, LimitWindow][], rows: HTMLElement) {
+  // The collapsed sidebar's version: 5-hour as the outer ring, weekly inside it.
   const box = $("#limit-rings");
-  box.hidden = !windows.length;
-  for (const [label, cls] of [["5-hour", "five"], ["Weekly", "week"]] as const) {
+  box.hidden = !rows.length;
+  for (const cls of ["five", "week"] as const) {
     const arc = box.querySelector<SVGCircleElement>(`.arc.${cls}`)!;
-    const w = windows.find(([l]) => l === label)?.[1];
-    const pct = w ? Math.max(0, Math.min(100, w.used_percentage)) : 0;
+    const pct = rows.find((r) => r.cls === cls)?.pct ?? 0;
     arc.style.display = pct > 0 ? "" : "none"; // a round cap would still draw a dot at 0
     arc.style.strokeDasharray = `${pct} 100`;
     arc.dataset.level = limitLevel(pct);
   }
-  box.title = [...rows.children]
-    .map((r) => (r as HTMLElement).title)
-    .concat("Outer ring: 5-hour · inner ring: weekly")
-    .join("\n");
+  if (limitPopFor) {
+    if (rows.length) renderLimitPop();
+    else closeLimitPop();
+  }
 }
+
+// ---------- plan limits: details card ----------
+// Hovering or focusing the limits (rings or bars) opens a card with each limit's use,
+// when it resets, and how fresh the numbers are.
+
+const limitPop = $("#limit-pop");
+let limitPopFor: HTMLElement | null = null;
+let limitPopClose = 0;
+
+function renderLimitPop() {
+  const anchor = limitPopFor;
+  if (!anchor) return;
+  const rows = limitRows();
+  const ago = Math.round((Date.now() - limitsAt) / 60000);
+  limitPop.innerHTML = `<div class="lp-head">Plan usage</div>`;
+  for (const r of rows) {
+    const { left, clock } = resetWhen(r.resetsAt);
+    const row = document.createElement("div");
+    row.className = `lp-row ${r.cls}`;
+    row.dataset.level = limitLevel(r.pct);
+    row.innerHTML = `<svg class="lp-ring" viewBox="0 0 20 20" aria-hidden="true"><circle class="track" cx="10" cy="10" r="7" /><circle class="arc" cx="10" cy="10" r="7" pathLength="100" /></svg>
+      <div class="lp-main"><div class="lp-top"><span class="lp-name"></span><span class="lp-pct"></span></div>
+      <div class="lp-bar"><i></i></div><div class="lp-reset"></div></div>`;
+    row.querySelector(".lp-name")!.textContent = `${r.label} limit`;
+    row.querySelector(".lp-pct")!.textContent = `${Math.round(r.pct)}% used`;
+    row.querySelector<SVGCircleElement>(".arc")!.style.strokeDasharray = `${r.pct} 100`;
+    row.querySelector<HTMLElement>(".lp-bar i")!.style.width = `${r.pct}%`;
+    row.querySelector(".lp-reset")!.textContent = `Resets ${left} · ${clock}`;
+    limitPop.appendChild(row);
+  }
+  const foot = document.createElement("div");
+  foot.className = "lp-foot";
+  foot.textContent = ago < 1 ? "Updated just now" : `Updated ${ago} min ago`;
+  if (anchor.id === "limit-rings") {
+    const legend = document.createElement("div");
+    legend.textContent = "Outer ring 5-hour · inner ring weekly";
+    foot.prepend(legend);
+  }
+  limitPop.appendChild(foot);
+  // Beside the anchor, vertically centred on it and kept inside the window.
+  limitPop.hidden = false;
+  const a = anchor.getBoundingClientRect();
+  const h = limitPop.offsetHeight;
+  limitPop.style.left = `${Math.round(a.right + 10)}px`;
+  limitPop.style.top = `${Math.round(Math.max(8, Math.min(innerHeight - h - 8, a.top + a.height / 2 - h / 2)))}px`;
+}
+
+function openLimitPop(anchor: HTMLElement) {
+  clearTimeout(limitPopClose);
+  if (!limitRows().length) return;
+  limitPopFor = anchor;
+  renderLimitPop();
+}
+
+function closeLimitPop() {
+  clearTimeout(limitPopClose);
+  limitPopFor = null;
+  limitPop.hidden = true;
+}
+
+for (const anchor of [$("#limits"), $("#limit-rings")]) {
+  anchor.addEventListener("mouseenter", () => openLimitPop(anchor));
+  anchor.addEventListener("focus", () => openLimitPop(anchor));
+  // A short grace period lets the pointer travel onto the card without it closing.
+  anchor.addEventListener("mouseleave", () => (limitPopClose = window.setTimeout(closeLimitPop, 150)));
+  anchor.addEventListener("blur", closeLimitPop);
+  anchor.addEventListener("keydown", (e) => e.key === "Escape" && closeLimitPop());
+}
+limitPop.addEventListener("mouseenter", () => clearTimeout(limitPopClose));
+limitPop.addEventListener("mouseleave", closeLimitPop);
+// Keep the times current while it's open.
+setInterval(() => limitPopFor && renderLimitPop(), 30_000);
+
 setInterval(renderLimits, 60_000); // drop a window once it has reset
 
 // Cheap to poll: a small status file, and only what Claude Code appended to the

@@ -43,8 +43,8 @@
       </button>
       <div class="section-label">Sessions <span id="tab-count"></span></div>
       <ul id="tabs"></ul>
-      <div id="limits" class="limits" hidden></div>
-      <div id="limit-rings" class="limit-rings" hidden>
+      <div id="limits" class="limits" tabindex="0" aria-label="Plan usage limits" aria-describedby="limit-pop" hidden></div>
+      <div id="limit-rings" class="limit-rings" tabindex="0" aria-label="Plan usage limits" aria-describedby="limit-pop" hidden>
         <svg viewBox="0 0 32 32" aria-hidden="true">
           <circle class="track" cx="16" cy="16" r="13" />
           <circle class="track" cx="16" cy="16" r="8" />
@@ -322,5 +322,6 @@
     </div>
 
     <script type="module" src="/src/main.ts"></script>
+      <div id="limit-pop" class="limit-pop" role="tooltip" hidden></div>
   </body>
 </html>
