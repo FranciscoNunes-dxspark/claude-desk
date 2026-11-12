@@ -78,7 +78,7 @@ const scenarios = {
     await p.evaluate(() => { window.__opt.spawnDelay = 300; window.__calls = []; });
     await p.click(".banner .btn.primary");
     await p.waitForTimeout(50);
-    await p.click("#tb-close");
+    await p.click('.term.active [data-act="close"]');
     await p.waitForTimeout(600);
     const calls = await p.evaluate(() => window.__calls);
     const spawned = calls.find((c) => c[0] === "pty_spawn")?.[3];
@@ -162,7 +162,7 @@ const scenarios = {
     return [n === 3, `${n} of 3 sessions open`];
   }],
   "closing asks once, even on a double click": [3, async (p) => {
-    await p.evaluate(() => { window.__calls = []; document.querySelector("#tb-close").click(); document.querySelector("#tb-close").click(); });
+    await p.evaluate(() => { window.__calls = []; const x = document.querySelector('.term.active [data-act="close"]'); x.click(); x.click(); });
     await p.waitForTimeout(500);
     const [n, asked] = [await tabs(p), await p.evaluate(() => window.__count("plugin:dialog|message"))];
     return [n === 2 && asked === 1, `${n} sessions left, asked ${asked}x`];
@@ -170,9 +170,9 @@ const scenarios = {
   "the close button keeps working after search": [3, async (p) => {
     await p.click("#tb-search");
     await p.keyboard.press("Escape");
-    await p.click("#tb-close");
+    await p.click('.term.active [data-act="close"]');
     await p.waitForTimeout(400);
-    await p.click("#tb-close");
+    await p.click('.term.active [data-act="close"]');
     await p.waitForTimeout(400);
     const n = await tabs(p);
     return [n === 1, `${n} sessions left of 3 after two closes`];

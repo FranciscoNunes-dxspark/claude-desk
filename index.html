@@ -67,15 +67,7 @@
     <main id="main">
       <div id="drag-strip" class="drag-strip" data-tauri-drag-region hidden></div>
       <div id="topbar" data-tauri-drag-region hidden>
-        <div class="crumb" data-tauri-drag-region>
-          <span id="tb-name" class="tb-name"></span>
-          <span id="tb-path" class="tb-path"></span>
-          <span id="tb-branch" class="branch" hidden></span>
-          <span id="tb-state" class="state-label" hidden></span>
-          <span id="tb-usage" class="usage" hidden></span>
-        </div>
-        <span id="tb-split-label" class="tb-split-label"></span>
-        <div id="tb-chips" class="chips-row"></div>
+        <span id="tb-split-label" class="tb-split-label" data-tauri-drag-region></span>
         <button id="tb-broadcast" class="icon-btn" title="Broadcast a prompt"><svg class="ic"><use href="#i-broadcast" /></svg></button>
         <button id="tb-changes" class="icon-btn" title="Changes"><svg class="ic"><use href="#i-diff" /></svg></button>
         <button id="tb-search" class="icon-btn" title="Search terminal"><svg class="ic"><use href="#i-search" /></svg></button>
@@ -84,14 +76,6 @@
           <button data-layout="columns" title="Side by side"><svg class="ic"><use href="#i-l-columns" /></svg></button>
           <button data-layout="rows" title="Stacked"><svg class="ic"><use href="#i-l-rows" /></svg></button>
           <button data-layout="grid" title="Grid"><svg class="ic"><use href="#i-l-grid" /></svg></button>
-        </div>
-        <div class="tb-actions">
-          <button id="tb-restart" class="icon-btn" title="Restart session">
-            <svg class="ic"><use href="#i-restart" /></svg>
-          </button>
-          <button id="tb-close" class="icon-btn" title="Close session">
-            <svg class="ic"><use href="#i-x" /></svg>
-          </button>
         </div>
       </div>
 

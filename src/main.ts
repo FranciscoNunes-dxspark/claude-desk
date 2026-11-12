@@ -393,7 +393,7 @@ class Session {
     this.el = document.createElement("div");
     this.el.className = "term";
     this.el.innerHTML = `
-      <div class="pane-head" title="Double-click to maximise">
+      <div class="pane-head">
         <span class="dot"></span>
         <span class="pane-name"></span>
         <span class="pane-path"></span>
@@ -1061,6 +1061,7 @@ function applyLayout() {
     const last = i === n - 1;
     x.el.style.gridColumn = split && !zoomed && layout === "grid" && last ? `${(i % gridCols) + 1} / -1` : "";
     x.el.classList.toggle("zoomed", x === zoomed);
+    x.el.querySelector<HTMLElement>(".pane-head")!.title = split ? "Double-click to maximise" : "";
     const zb = x.el.querySelector<HTMLButtonElement>('[data-act="zoom"]')!;
     zb.innerHTML = icon(x === zoomed ? "restore" : "max");
     zb.title = x === zoomed ? "Restore layout" : "Maximise";
@@ -1213,23 +1214,11 @@ function updateTopbar() {
     x.tab.querySelector("kbd")!.textContent = i < 9 ? (isMac ? `⌘${i + 1}` : `${i + 1}`) : "";
   });
   $("#tab-count").textContent = sessions.length ? String(sessions.length) : "";
-  if (!active) return;
-  const o = active.opts;
-  $("#tb-name").textContent = displayName(o);
-  $("#tb-path").textContent = dirOf(o);
-  const st = $("#tb-state");
-  st.textContent = stateLabel(active.state, active.state === "blocked" ? active.blockedKind() : undefined);
-  st.hidden = !st.textContent;
-  if (active.state) st.dataset.state = active.state;
-  renderUsage($("#tb-usage"), active);
-  const br = $("#tb-branch");
-  br.hidden = !active.branch;
-  br.innerHTML = active.branch ? `${icon("branch")}<span></span>` : "";
-  if (active.branch) br.querySelector("span")!.textContent = active.branch;
-  $("#tb-chips").replaceChildren(...chipsFor(o));
+  // The session's own details and actions are on its pane's header row.
+  const count = `${sessions.length} session${sessions.length === 1 ? "" : "s"}`;
   $("#tb-split-label").textContent = zoomed
-    ? `${displayName(zoomed.opts)} maximised · ${sessions.length} sessions`
-    : `${sessions.length} sessions · ${LAYOUT_NAMES[layout]}`;
+    ? `${displayName(zoomed.opts)} maximised · ${count}`
+    : `${count} · ${LAYOUT_NAMES[layout]}`;
 }
 
 /** Sessions waiting on "End the session?", so a second click doesn't ask twice. */
@@ -2658,8 +2647,6 @@ $("#empty-open").addEventListener("click", async () => {
 $("#settings-btn").addEventListener("click", openSettings);
 $("#new-kbd").textContent = isMac ? "⌘T" : "Ctrl⇧T";
 $("#empty-new").addEventListener("click", () => openNewDialog());
-$("#tb-restart").addEventListener("click", () => active?.restart());
-$("#tb-close").addEventListener("click", () => active && closeSession(active));
 $("#tb-search").title = `Search terminal (${isMac ? "⌘F" : "Ctrl+Shift+F"})`;
 {
   const mod = isMac ? "⌘" : "Ctrl+Shift+";

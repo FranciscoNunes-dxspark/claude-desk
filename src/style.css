@@ -350,16 +350,6 @@ body.dragging #main::after {
   flex: none;
 }
 #topbar[hidden] { display: none; }
-.crumb { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.tb-name { font-weight: 600; white-space: nowrap; }
-.tb-path {
-  font-family: var(--mono);
-  font-size: 11.5px;
-  color: var(--text-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .chips-row { display: flex; gap: 6px; margin-left: auto; }
 .chip {
   font-size: 11px;
@@ -372,7 +362,6 @@ body.dragging #main::after {
   white-space: nowrap;
 }
 .chip.warn { color: var(--warn-text); background: var(--accent-soft); border-color: var(--accent-border); }
-.tb-actions { display: flex; gap: 2px; }
 
 #terminals { position: relative; flex: 1; min-height: 0; }
 .term { background: var(--bg); }
@@ -383,7 +372,10 @@ body.dragging #main::after {
 
 /* Tabs: one session fills the area. */
 #terminals.tabs .term { position: absolute; inset: 0; display: none; }
-#terminals.tabs .term.active { display: block; }
+#terminals.tabs .term.active { display: flex; flex-direction: column; }
+#terminals.tabs .term-body { position: relative; inset: auto; flex: 1; min-height: 0; }
+/* One pane: nothing to maximise. */
+#terminals.tabs .pane-head [data-act="zoom"] { display: none; }
 
 /* Split layouts: every session gets a pane; 1px gaps form the dividers. */
 #terminals.split {
@@ -412,7 +404,8 @@ body.dragging #main::after {
 #terminals.split .term:not(.active):hover .term-body { opacity: .9; }
 #terminals.split .term-body { position: relative; inset: auto; flex: 1; min-height: 0; padding: 8px 4px 4px 12px; }
 
-#terminals.split .pane-head {
+/* Every pane has a header row with the session's details and actions. */
+#terminals .pane-head {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -441,9 +434,8 @@ body.dragging #main::after {
 .pane-head .icon-btn .ic { width: 14px; height: 14px; }
 
 /* Header bar in split mode: summary + layout switch only. */
-.tb-split-label { display: none; color: var(--text-2); font-weight: 500; }
-body.is-split .crumb, body.is-split #tb-chips, body.is-split .tb-actions { display: none; }
-body.is-split .tb-split-label { display: block; margin-right: auto; }
+/* The title bar is app-level: a summary on the left, global tools on the right. */
+.tb-split-label { color: var(--text-2); font-weight: 500; margin-right: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .layout-switch {
   display: flex;
@@ -729,7 +721,6 @@ body.resizing-col .term-body, body.resizing-row .term-body { pointer-events: non
 .branch[hidden] { display: none; }
 .branch span { overflow: hidden; text-overflow: ellipsis; }
 .branch .ic { width: 13px; height: 13px; color: var(--text-3); }
-.crumb .branch { align-self: center; }
 .pane-head .branch { font-size: 10.5px; flex: none; max-width: 160px; }
 .pane-head .pane-path { flex: 0 1 auto; }
 .pane-head .chips-row { margin-left: auto; }
@@ -739,7 +730,7 @@ body.resizing-col .term-body, body.resizing-row .term-body { pointer-events: non
 
 .searchbar {
   position: absolute;
-  top: 10px;
+  top: 42px; /* below the pane's header row */
   right: 18px;
   z-index: 8;
   display: flex;
@@ -965,11 +956,9 @@ dialog menu { position: sticky; bottom: -22px; z-index: 1; background: var(--sur
   border: 1px solid var(--hairline);
 }
 .state-label[hidden] { display: none; }
-[data-state="working"] > .pane-head .state-label, #tb-state[data-state="working"] { color: var(--st-working); border-color: var(--st-working-line); }
-[data-state="blocked"] > .pane-head .state-label, #tb-state[data-state="blocked"] { color: var(--accent-hi); border-color: var(--accent-line); background: var(--accent-soft); }
-[data-state="idle"] > .pane-head .state-label, [data-state="done"] > .pane-head .state-label,
-#tb-state[data-state="idle"], #tb-state[data-state="done"] { color: var(--ok); }
-#tb-state { align-self: center; }
+[data-state="working"] > .pane-head .state-label { color: var(--st-working); border-color: var(--st-working-line); }
+[data-state="blocked"] > .pane-head .state-label { color: var(--accent-hi); border-color: var(--accent-line); background: var(--accent-soft); }
+[data-state="idle"] > .pane-head .state-label, [data-state="done"] > .pane-head .state-label { color: var(--ok); }
 
 #tabs .status-line { font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #tabs .status-line[hidden], #tabs .path[hidden] { display: none; }
@@ -986,7 +975,7 @@ body.sidebar-collapsed #tabs li.colored { box-shadow: none; }
 body.sidebar-collapsed #tabs li.colored.active { box-shadow: inset 0 0 0 1px var(--hairline); }
 body.sidebar-collapsed #tabs li.colored.active::before { display: block; }
 body.sidebar-collapsed #tabs li.colored .initial { box-shadow: inset 0 0 0 1.5px var(--session-color); color: var(--session-color); }
-#terminals.split .term.colored .pane-head { box-shadow: inset 0 2px 0 var(--session-color); }
+#terminals .term.colored .pane-head { box-shadow: inset 0 2px 0 var(--session-color); }
 #terminals.split .term.colored .pane-name { color: var(--session-color); }
 
 #tabs li.dragging { opacity: .85; background: var(--surface-3); box-shadow: var(--shadow-float); cursor: grabbing; z-index: 2; }
@@ -1133,7 +1122,6 @@ dialog.wide { width: min(720px, calc(100vw - 32px)); }
   cursor: default;
 }
 .usage[hidden] { display: none; }
-#tb-usage { align-self: center; font-size: 11px; }
 .usage .meter {
   position: relative;
   width: 34px;
