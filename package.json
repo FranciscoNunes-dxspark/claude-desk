@@ -1,5 +1,5 @@
 {
-  "name": "claude-desk",
+  "name": "switchyard",
   "private": true,
   "version": "0.2.3",
   "type": "module",
@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "tauri": "tauri",
-    "postinstall": "node scripts/patch-xterm.mjs"
+    "postinstall": "node scripts/patch-xterm.mjs",
+    "test:ui": "node tests/ui.mjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",
@@ -37,6 +38,7 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
+    "playwright": "1.63.0",
     "typescript": "^5.6.0",
     "vite": "^6.0.0"
   }

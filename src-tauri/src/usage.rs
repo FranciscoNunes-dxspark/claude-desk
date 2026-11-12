@@ -111,7 +111,7 @@ fn usage_of(path: &Path) -> Option<Usage> {
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, Tracked>>> = OnceLock::new();
     let mut file = fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
-    let mut cache = CACHE.get_or_init(Default::default).lock().ok()?;
+    let mut cache = CACHE.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
     let t = cache.entry(path.to_path_buf()).or_default();
     if len < t.offset {
         *t = Tracked::default(); // rewritten or truncated: start over

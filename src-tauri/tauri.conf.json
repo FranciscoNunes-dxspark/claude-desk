@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Claude Desk",
+  "productName": "Switchyard",
   "version": "0.2.3",
   "identifier": "com.dxspark.claudedesk",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Claude Desk",
+        "title": "Switchyard",
         "width": 1200,
         "height": 800,
         "minWidth": 640,
@@ -21,7 +21,7 @@
         "dragDropEnabled": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "backgroundColor": "#141413"
+        "backgroundColor": "#12151a"
       }
     ],
     "security": {
@@ -30,6 +30,9 @@
   },
   "bundle": {
     "active": true,
+    "windows": {
+      "nsis": { "installerHooks": "./windows/hooks.nsh" }
+    },
     "targets": "all",
     "icon": [
       "icons/32x32.png",

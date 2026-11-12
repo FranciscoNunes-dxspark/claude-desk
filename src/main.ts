@@ -232,7 +232,7 @@ function timeAgo(ms: number) {
  */
 async function askToConfirm(message: string, okLabel: string): Promise<boolean> {
   try {
-    return await ask(message, { title: "Claude Desk", kind: "warning", okLabel, cancelLabel: "Cancel" });
+    return await ask(message, { title: "Switchyard", kind: "warning", okLabel, cancelLabel: "Cancel" });
   } catch {
     return true;
   }
@@ -339,6 +339,23 @@ function stateLabel(state: ProgramState | null, kind?: string): string {
   }
 }
 
+/**
+ * Wraps code that xterm runs while parsing output (escape-sequence handlers, the bell).
+ * An exception there stops xterm processing that terminal's output for good: nothing
+ * more is drawn or acknowledged, the backend stops reading, and Claude blocks on its
+ * output, so the session freezes. Errors are logged instead.
+ */
+function guarded<A extends unknown[]>(fn: (...args: A) => boolean | void): (...args: A) => boolean {
+  return (...args) => {
+    try {
+      return fn(...args) ?? true;
+    } catch (err) {
+      console.error("terminal handler failed:", err);
+      return true;
+    }
+  };
+}
+
 class Session {
   readonly el: HTMLDivElement;
   readonly body: HTMLDivElement;
@@ -360,6 +377,12 @@ class Session {
   private ptyId: number | null = null;
   private restartPending = false;
   private disposed = false;
+  /** Numbers each start; output, exit and acks from an earlier run are ignored. */
+  private run = 0;
+  /** Set while a start is in progress, so Enter or Restart can't start a second Claude. */
+  private starting = false;
+  /** Keys typed while Claude is starting, sent once its process exists. */
+  private pendingInput: string[] = [];
   private banner: HTMLDivElement | null = null;
   private resizeObs: ResizeObserver;
   private burstStart = 0;
@@ -427,7 +450,14 @@ class Session {
     }
     this.term.textarea?.addEventListener("focus", () => active !== this && activate(this, false));
 
-    this.term.attachCustomKeyEventHandler((e) => this.handleKey(e));
+    this.term.attachCustomKeyEventHandler((e) => {
+      try {
+        return this.handleKey(e);
+      } catch (err) {
+        console.error("key handler failed:", err);
+        return true; // let xterm send the key to Claude as usual
+      }
+    });
     this.term.onData((data) => this.write(data));
     this.term.onResize(({ cols, rows }) => {
       if (this.ptyId != null) void invoke("pty_resize", { id: this.ptyId, cols, rows }).catch(() => {});
@@ -438,27 +468,27 @@ class Session {
     // Claude Code's program status (OSC 7501): it asks "7501;?" at startup and, if the
     // terminal answers, reports state=working|blocked|idle|done|clear with a title,
     // message and, when blocked, a kind (permission, question).
-    this.term.parser.registerOscHandler(7501, (data) => {
+    this.term.parser.registerOscHandler(7501, guarded((data) => {
       if (data.startsWith("?")) {
         this.write("\x1b]7501;?\x07");
         return true;
       }
       this.onProgramStatus(data);
       return true;
-    });
+    }));
 
     // Explicit "look at me" signals: terminal bell and OSC 9 / OSC 777 notifications.
-    this.term.onBell(() => this.flagAttention("needs your attention"));
-    this.term.parser.registerOscHandler(9, (data) => {
+    this.term.onBell(guarded(() => this.flagAttention("needs your attention")));
+    this.term.parser.registerOscHandler(9, guarded((data) => {
       // OSC 9;4 is a progress report, not a notification.
       if (!/^4;/.test(data)) this.flagAttention("needs your attention", data);
       return true;
-    });
-    this.term.parser.registerOscHandler(777, (data) => {
+    }));
+    this.term.parser.registerOscHandler(777, guarded((data) => {
       const [kind, title, body] = data.split(";");
       if (kind === "notify") this.flagAttention(title || "needs your attention", body);
       return true;
-    });
+    }));
 
     this.search.onDidChangeResults(({ resultIndex, resultCount }) => {
       if (this === active) {
@@ -718,11 +748,21 @@ class Session {
 
   write(data: string) {
     if (this.ptyId == null) {
+      if (this.starting) this.pendingInput.push(data);
       // Enter restarts an exited session.
-      if (data === "\r") void this.start();
+      else if (data === "\r" && this.banner) void this.start();
       return;
     }
-    void invoke("pty_write", { id: this.ptyId, data }).catch(() => {});
+    const id = this.ptyId;
+    const run = this.run;
+    void invoke("pty_write", { id, data }).catch(() => {
+      // The backend no longer has this process. Its exit notice normally follows
+      // within a second; if it never does, show the session as ended rather than
+      // leaving a terminal that silently ignores what's typed.
+      setTimeout(() => {
+        if (this.run === run && this.ptyId === id) this.exited(null);
+      }, 1500);
+    });
   }
 
   /** Types `text` into Claude's prompt and submits it (used by broadcast). */
@@ -781,6 +821,19 @@ class Session {
   }
 
   async start() {
+    if (this.starting || this.ptyId != null || this.disposed) return;
+    this.starting = true;
+    this.pendingInput = [];
+    const run = ++this.run;
+    try {
+      await this.spawn(run);
+    } finally {
+      this.starting = false;
+      this.pendingInput = [];
+    }
+  }
+
+  private async spawn(run: number) {
     if (this.banner) {
       // Restarting: clear the previous run's screen so the new TUI draws cleanly.
       this.banner.remove();
@@ -790,25 +843,42 @@ class Session {
     this.refit();
     this.setStatus("running");
 
-    const onData = new Channel<ArrayBuffer | number[]>();
-    // Flow control: acknowledge bytes once xterm has processed them. The
-    // backend stops reading when 1 MB is unacknowledged, so a flood of output
-    // can't pile up in memory faster than it can be drawn.
+    // Flow control: acknowledge bytes once xterm has processed them. The backend
+    // pauses reading when 1 MB is unacknowledged, so a flood of output can't pile up
+    // in memory faster than it can be drawn. (It never waits more than 2 s, so a
+    // missed ack can slow a session down but not freeze it.)
     const ACK_EVERY = 64 << 10;
-    let processed = 0;
+    let owed = 0;
+    let flushTimer = 0;
+    const current = () => run === this.run && !this.disposed;
+    const ack = (force: boolean) => {
+      if (!current() || this.ptyId == null || owed === 0 || (!force && owed < ACK_EVERY)) return;
+      void invoke("pty_ack", { id: this.ptyId, bytes: owed }).catch(() => {});
+      owed = 0;
+    };
+    const onData = new Channel<ArrayBuffer | number[]>();
     onData.onmessage = (chunk) => {
+      if (!current()) return; // a previous run's last output
       const bytes = new Uint8Array(chunk);
       this.noteOutput();
+      // A hidden window's timers are throttled, which slows xterm's processing; ack
+      // on arrival then, so Claude isn't held back while the app is minimised.
+      const early = document.hidden;
+      if (early) owed += bytes.length;
       this.term.write(bytes, () => {
-        processed += bytes.length;
-        if (processed >= ACK_EVERY && this.ptyId != null) {
-          void invoke("pty_ack", { id: this.ptyId, bytes: processed }).catch(() => {});
-          processed = 0;
-        }
+        if (!early) owed += bytes.length;
+        ack(false);
+        // Settle the remainder once output pauses, so nothing stays owed.
+        clearTimeout(flushTimer);
+        flushTimer = window.setTimeout(() => ack(true), 250);
       });
+      if (early) ack(false);
     };
     const onExit = new Channel<{ code: number | null }>();
-    onExit.onmessage = ({ code }) => this.exited(code);
+    onExit.onmessage = ({ code }) => {
+      clearTimeout(flushTimer);
+      if (run === this.run) this.exited(code);
+    };
 
     // A worktree session: the first start asks Claude Code to create it (--worktree),
     // later starts run in it directly.
@@ -834,7 +904,7 @@ class Session {
     this.updateProgramStatus();
 
     try {
-      this.ptyId = await invoke<number>("pty_spawn", {
+      const id = await invoke<number>("pty_spawn", {
         cwd: spawnDir,
         args: buildArgs(
           this.opts,
@@ -849,17 +919,26 @@ class Session {
         onData,
         onExit,
       });
+      if (!current()) {
+        // Closed (or superseded) while Claude was starting: don't leave it running.
+        void invoke("pty_kill", { id }).catch(() => {});
+        return;
+      }
+      this.ptyId = id;
+      if (this.pendingInput.length) this.write(this.pendingInput.splice(0).join(""));
       // The pane may have been resized while the process was starting (resize
       // events are dropped until we have an id), so sync the size once more.
       this.refit();
       void invoke("pty_resize", { id: this.ptyId, cols: this.term.cols, rows: this.term.rows }).catch(() => {});
     } catch (err) {
+      if (!current()) return;
       this.term.write(`\r\n\x1b[31mCould not start Claude Code:\x1b[0m ${err}\r\n`);
       this.exited(null);
     }
   }
 
   restart() {
+    if (this.starting) return;
     if (this.ptyId == null) return void this.start();
     this.restartPending = true;
     void invoke("pty_kill", { id: this.ptyId }).catch(() => {});
@@ -868,6 +947,7 @@ class Session {
   private exited(code: number | null) {
     this.ptyId = null;
     if (this.disposed) return; // closed on purpose: no banner, no "session ended" alert
+    if (this.banner) return; // already shown as ended
     if (this.restartPending) {
       this.restartPending = false;
       this.term.reset();
@@ -1325,6 +1405,8 @@ function noteLimits(l: RateLimits) {
   renderLimits();
 }
 
+const limitLevel = (pct: number) => (pct >= 90 ? "full" : pct >= 70 ? "high" : "ok");
+
 function renderLimits() {
   const el = $("#limits");
   const now = Date.now() / 1000;
@@ -1337,8 +1419,8 @@ function renderLimits() {
     ...windows.map(([label, w]) => {
       const pct = Math.max(0, Math.min(100, w.used_percentage));
       const row = document.createElement("div");
-      row.className = "limit";
-      row.dataset.level = pct >= 90 ? "full" : pct >= 70 ? "high" : "ok";
+      row.className = `limit ${label === "Weekly" ? "week" : "five"}`;
+      row.dataset.level = limitLevel(pct);
       row.innerHTML = `<span class="l-name"></span><span class="meter"><i></i></span><span class="l-pct"></span>`;
       row.querySelector(".l-name")!.textContent = label;
       row.querySelector<HTMLElement>(".meter i")!.style.width = `${pct}%`;
@@ -1351,6 +1433,25 @@ function renderLimits() {
       return row;
     }),
   );
+  renderLimitRings(windows, el);
+}
+
+/** The collapsed sidebar's version: 5-hour as the outer ring, weekly inside it. */
+function renderLimitRings(windows: [string, LimitWindow][], rows: HTMLElement) {
+  const box = $("#limit-rings");
+  box.hidden = !windows.length;
+  for (const [label, cls] of [["5-hour", "five"], ["Weekly", "week"]] as const) {
+    const arc = box.querySelector<SVGCircleElement>(`.arc.${cls}`)!;
+    const w = windows.find(([l]) => l === label)?.[1];
+    const pct = w ? Math.max(0, Math.min(100, w.used_percentage)) : 0;
+    arc.style.display = pct > 0 ? "" : "none"; // a round cap would still draw a dot at 0
+    arc.style.strokeDasharray = `${pct} 100`;
+    arc.dataset.level = limitLevel(pct);
+  }
+  box.title = [...rows.children]
+    .map((r) => (r as HTMLElement).title)
+    .concat("Outer ring: 5-hour · inner ring: weekly")
+    .join("\n");
 }
 setInterval(renderLimits, 60_000); // drop a window once it has reset
 
@@ -1735,18 +1836,18 @@ async function lookForUpdate(manual = false): Promise<void> {
     return;
   }
   if (!update) {
-    if (manual) status.textContent = `Claude Desk ${await getVersion()} is up to date.`;
+    if (manual) status.textContent = `Switchyard ${await getVersion()} is up to date.`;
     return;
   }
   pendingUpdate = update;
-  if (manual) status.textContent = `Claude Desk ${update.version} is available.`;
+  if (manual) status.textContent = `Switchyard ${update.version} is available.`;
   if (manual || updateDismissed !== update.version) showUpdateToast(update);
 }
 
 function showUpdateToast(update: Update) {
   const toastEl = $("#update-toast");
   toastEl.querySelector(".ut-text")!.textContent =
-    `Claude Desk ${update.version} is out (you have ${update.currentVersion})`;
+    `Switchyard ${update.version} is out (you have ${update.currentVersion})`;
   const go = toastEl.querySelector<HTMLButtonElement>(".ut-go")!;
   go.disabled = false;
   go.textContent = "Install and restart";
@@ -1797,7 +1898,7 @@ $("#update-toast").querySelector(".ut-later")!.addEventListener("click", () => {
   $("#update-toast").hidden = true;
 });
 $("#s-check").addEventListener("click", () => void lookForUpdate(true));
-void getVersion().then((v) => ($("#s-version").textContent = `Claude Desk ${v}`)).catch(() => {});
+void getVersion().then((v) => ($("#s-version").textContent = `Switchyard ${v}`)).catch(() => {});
 
 // Check 10 s after opening (as Fleet does), then every 6 hours for windows left open.
 setTimeout(() => void lookForUpdate(), 10_000);
@@ -2409,7 +2510,24 @@ $("#pal-q").addEventListener("keydown", (e) => {
 $("#palette-dialog").addEventListener("click", (e) => {
   if (e.target === e.currentTarget) $<HTMLDialogElement>("#palette-dialog").close();
 });
-$("#palette-dialog").addEventListener("close", () => active?.term.focus());
+/** Whether keystrokes are going to a text field (a terminal's own input aside). */
+function typingElsewhere(): boolean {
+  const el = document.activeElement as HTMLElement | null;
+  if (!el || el.classList.contains("xterm-helper-textarea")) return false;
+  return el.matches("input, textarea, select, [contenteditable]:not([contenteditable='false'])");
+}
+
+// Keystrokes must land in a terminal: give focus back to the active session whenever a
+// dialog closes (the browser would return it to the button that opened the dialog),
+// unless another dialog is open or a text field has focus.
+for (const dlg of document.querySelectorAll("dialog")) {
+  dlg.addEventListener("close", () =>
+    requestAnimationFrame(() => {
+      if (document.querySelector("dialog[open]") || typingElsewhere()) return;
+      active?.term.focus();
+    }),
+  );
+}
 
 // ---------- drag & drop ----------
 
@@ -2430,6 +2548,8 @@ void getCurrentWebview().onDragDropEvent((ev) => {
 
 void getCurrentWindow().onFocusChanged(({ payload: focused }) => {
   windowFocused = focused;
+  // Coming back to the window: type into the active session unless something else has focus.
+  if (focused && active && !document.querySelector("dialog[open]") && !typingElsewhere()) active.term.focus();
   if (focused && active) active.clearAttention();
   if (focused && changesOpen()) scheduleChangesRefresh();
 });

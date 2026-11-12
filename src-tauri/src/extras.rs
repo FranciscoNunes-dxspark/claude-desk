@@ -212,7 +212,7 @@ pub fn git_branch(cwd: String) -> Option<String> {
 /// short-lived one would lose the text as soon as it's dropped.
 fn with_clipboard<T>(f: impl FnOnce(&mut arboard::Clipboard) -> Result<T, String>) -> Result<T, String> {
     static CLIPBOARD: std::sync::OnceLock<std::sync::Mutex<Option<arboard::Clipboard>>> = std::sync::OnceLock::new();
-    let mut slot = CLIPBOARD.get_or_init(Default::default).lock().map_err(|e| e.to_string())?;
+    let mut slot = CLIPBOARD.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
     if slot.is_none() {
         *slot = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
     }
@@ -242,7 +242,7 @@ pub async fn write_clipboard_text(text: String) -> Result<(), String> {
 pub async fn save_clipboard_image() -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let Some(img) = with_clipboard(|c| Ok(c.get_image().ok()))? else { return Ok(None) };
-        let dir = std::env::temp_dir().join("claude-desk");
+        let dir = std::env::temp_dir().join("switchyard");
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let stamp = std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
         let path = dir.join(format!("pasted-{stamp}.png"));
