@@ -1207,6 +1207,8 @@ function chipsFor(o: LaunchOptions): HTMLSpanElement[] {
 
 function updateTopbar() {
   $("#topbar").hidden = !active;
+  // With no session there's no top bar to drag the window by: a strip stands in.
+  $("#drag-strip").hidden = !isWindows || !!active;
   sessions.forEach((x, i) => {
     x.tab.querySelector("kbd")!.textContent = i < 9 ? (isMac ? `⌘${i + 1}` : `${i + 1}`) : "";
   });
@@ -2683,6 +2685,32 @@ for (const b of document.querySelectorAll<HTMLButtonElement>("#layout-switch but
 
 for (const btn of document.querySelectorAll<HTMLButtonElement>("dialog .cancel")) {
   btn.addEventListener("click", () => btn.closest("dialog")!.close("cancel"));
+}
+
+// ---------- window buttons (Windows) ----------
+// There the window has no system frame (src-tauri/src/lib.rs), so the app draws its
+// own minimise, maximise/restore and close buttons at the top right. macOS and Linux
+// keep their native ones.
+
+if (isWindows) {
+  document.body.classList.add("custom-titlebar");
+  const controls = $("#win-controls");
+  controls.hidden = false;
+  const win = getCurrentWindow();
+  const maxBtn = controls.querySelector<HTMLButtonElement>('[data-win="max"]')!;
+  const syncMaximized = async () => {
+    const max = await win.isMaximized().catch(() => false);
+    controls.classList.toggle("maximized", max);
+    maxBtn.title = maxBtn.ariaLabel = max ? "Restore" : "Maximise";
+  };
+  controls.addEventListener("click", (e) => {
+    const act = (e.target as HTMLElement).closest<HTMLButtonElement>("button")?.dataset.win;
+    if (act === "min") void win.minimize().catch(() => {});
+    else if (act === "max") void win.toggleMaximize().catch(() => {});
+    else if (act === "close") void win.close().catch(() => {});
+  });
+  void win.onResized(() => void syncMaximized());
+  void syncMaximized();
 }
 
 // ---------- collapsible sidebar ----------

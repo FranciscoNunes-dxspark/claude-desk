@@ -1,3 +1,5 @@
+use tauri::Manager;
+
 mod extras;
 mod git;
 mod migrate;
@@ -14,6 +16,21 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(pty::PtyState::default())
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                // Windows: the app draws its own title bar and window buttons (index.html
+                // #win-controls); the window keeps its resize edges, snapping and shadow.
+                // macOS keeps its native buttons over the app's top bar (titleBarStyle
+                // "Overlay"); Linux keeps the system frame, as an undecorated window there
+                // can't be resized from its edges.
+                #[cfg(windows)]
+                let _ = window.set_decorations(false);
+                // The window starts hidden (tauri.conf.json) so the system frame never
+                // flashes before it's removed.
+                let _ = window.show();
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             pty::pty_spawn,
             pty::pty_write,

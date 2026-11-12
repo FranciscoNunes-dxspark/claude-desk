@@ -65,6 +65,7 @@
     </aside>
 
     <main id="main">
+      <div id="drag-strip" class="drag-strip" data-tauri-drag-region hidden></div>
       <div id="topbar" data-tauri-drag-region hidden>
         <div class="crumb" data-tauri-drag-region>
           <span id="tb-name" class="tb-name"></span>
@@ -322,6 +323,11 @@
     </div>
 
     <script type="module" src="/src/main.ts"></script>
-      <div id="limit-pop" class="limit-pop" role="tooltip" hidden></div>
+      <div id="win-controls" class="win-controls" hidden>
+      <button type="button" data-win="min" aria-label="Minimise" title="Minimise"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0 5.5h10" /></svg></button>
+      <button type="button" data-win="max" aria-label="Maximise" title="Maximise"><svg viewBox="0 0 10 10" aria-hidden="true"><path class="w-max" d="M.5 .5h9v9h-9z" /><path class="w-restore" d="M.5 2.5h7v7h-7zM2.5 2.5V.5h7v7h-2" /></svg></button>
+      <button type="button" data-win="close" class="w-close" aria-label="Close" title="Close"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M.5 .5l9 9M9.5 .5l-9 9" /></svg></button>
+    </div>
+    <div id="limit-pop" class="limit-pop" role="tooltip" hidden></div>
   </body>
 </html>

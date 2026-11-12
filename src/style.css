@@ -1248,3 +1248,40 @@ body.sidebar-collapsed .limit-rings:not([hidden]) { border-top: 1px solid var(--
 .lp-bar i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; }
 .lp-reset { color: var(--text-3); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .lp-foot { display: grid; gap: 2px; padding-top: 8px; border-top: 1px solid var(--hairline); color: var(--text-3); font-size: 11px; }
+
+/* Window buttons and drag strip (Windows, where the app draws its own title bar). */
+.win-controls { position: fixed; top: 0; right: 0; z-index: 45; display: flex; height: 42px; }
+.win-controls[hidden] { display: none; }
+.win-controls button {
+  width: 46px;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  cursor: default;
+  transition: background .1s, color .1s;
+}
+.win-controls button:hover { background: var(--hover-strong, var(--btn-hover)); color: var(--text); }
+.win-controls button:active { opacity: .8; }
+.win-controls button.w-close:hover { background: #c42b1c; color: #fff; }
+.win-controls button:focus-visible { outline: 2px solid var(--accent-line); outline-offset: -2px; }
+.win-controls svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1; shape-rendering: crispEdges; }
+.win-controls .w-restore, .win-controls.maximized .w-max { display: none; }
+.win-controls.maximized .w-restore { display: inline; }
+/* Keep the top bar's own buttons clear of the window buttons. */
+body.custom-titlebar #topbar { padding-right: 160px; }
+.drag-strip { position: absolute; top: 0; left: 0; right: 138px; height: 42px; z-index: 5; }
+.drag-strip[hidden] { display: none; }
+/* A divider sets the window's buttons apart from the session's own (e.g. its ×). */
+body.custom-titlebar .win-controls { padding-left: 9px; }
+body.custom-titlebar .win-controls::before {
+  content: "";
+  align-self: center;
+  width: 1px;
+  height: 18px;
+  margin-right: 8px;
+  background: var(--hairline-strong);
+}
