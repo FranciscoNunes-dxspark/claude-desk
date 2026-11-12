@@ -2616,14 +2616,67 @@ for (const dlg of document.querySelectorAll("dialog")) {
 
 // ---------- drag & drop ----------
 
+// Dropped files go to the session under the pointer: its pane (any layout) or its tab
+// in the sidebar; elsewhere, the active session. A running session gets the paths
+// typed in, like a terminal does; with none running there, the drop opens a new
+// session in that folder. While dragging, an outline shows where the drop will land.
+
+const dropHint = $("#drop-hint");
+let dragCount = 0;
+let dropTab: HTMLElement | null = null;
+
+/** The session a drop at (x, y) in page pixels goes to. */
+function dropTargetAt(x: number, y: number): Session | null {
+  const el = document.elementFromPoint(x, y);
+  const pane = el?.closest(".term");
+  const tab = el?.closest("#tabs li");
+  return sessions.find((s) => s.el === pane || s.tab === tab) ?? active;
+}
+
+function showDropHint(x: number, y: number) {
+  const s = dropTargetAt(x, y);
+  // Over the pane if it's on screen; otherwise (a background tab's session) over the
+  // whole session area, which is where it will show once the drop switches to it.
+  const visible = !!s && s.el.offsetParent !== null;
+  const area = visible ? s.el : $("#terminals");
+  // A session that isn't on screen: cover what is, so it's clear where the drop goes.
+  dropHint.classList.toggle("elsewhere", !visible);
+  const r = area.getBoundingClientRect();
+  Object.assign(dropHint.style, { left: `${r.left + 6}px`, top: `${r.top + 6}px`, width: `${r.width - 12}px`, height: `${r.height - 12}px` });
+  const paths = dragCount === 1 ? "the path" : `${dragCount} paths`;
+  dropHint.textContent =
+    s?.running
+      ? `Insert ${paths} into “${displayName(s.opts)}”${visible ? "" : " (switches to it)"}`
+      : "Drop to open a new session in this folder";
+  dropHint.hidden = false;
+  const tab = s?.running ? s.tab : null;
+  if (dropTab !== tab) {
+    dropTab?.classList.remove("drop-target");
+    tab?.classList.add("drop-target");
+    dropTab = tab;
+  }
+}
+
+function hideDropHint() {
+  dropHint.hidden = true;
+  dropTab?.classList.remove("drop-target");
+  dropTab = null;
+}
+
 void getCurrentWebview().onDragDropEvent((ev) => {
   const p = ev.payload;
-  document.body.classList.toggle("dragging", p.type === "enter" || p.type === "over");
-  if (p.type !== "drop" || p.paths.length === 0) return;
-  if (active?.running) {
-    // Dropping files into a session inserts their paths, like a terminal does.
-    active.write(p.paths.map(shellQuote).join(" ") + " ");
-    active.term.focus();
+  if (p.type === "leave") return hideDropHint();
+  if (p.type === "enter") dragCount = p.paths.length;
+  // Tauri reports the pointer in physical pixels.
+  const { x, y } = p.position.toLogical(devicePixelRatio);
+  if (p.type !== "drop") return showDropHint(x, y);
+  hideDropHint();
+  if (p.paths.length === 0) return;
+  const target = dropTargetAt(x, y);
+  if (target?.running) {
+    if (target !== active) activate(target);
+    target.write(p.paths.map(shellQuote).join(" ") + " ");
+    target.term.focus();
   } else {
     openNewDialog(p.paths[0]);
   }
