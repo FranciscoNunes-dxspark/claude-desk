@@ -80,10 +80,15 @@ state; each one fails on the code before its fix.
 ## Releases and updates
 
 **Renamed from Claude Desk.** Installed copies of Claude Desk update to Switchyard like to any
-other release. The app's identifier is still `com.dxspark.claudedesk`, so settings, open sessions
-and history carry over. On Windows the installer keys an install by its name, so Switchyard's
-installer then removes the old Claude Desk folder, shortcuts and uninstall entry
+other release. The identifier changed too (`com.dxspark.claudedesk` → `com.dxspark.switchyard`):
+on its first launch the app copies its data (settings, open sessions, recent folders) from the
+old identifier's folders before any window opens (`src-tauri/src/migrate.rs`); the old folders
+are left as they were. On Windows the installer keys an install by its name, so Switchyard's
+installer removes the old Claude Desk folder, shortcuts, uninstall entry and `claude-desk.exe`
 (`src-tauri/windows/hooks.nsh`); a pinned taskbar shortcut may need pinning again.
+
+Updates are looked for in this repository under its new name first, then its old one
+(`claude-desk`), so renaming the repository on GitHub doesn't strand installed copies.
 
 Releases work like Fleet's desktop window:
 
