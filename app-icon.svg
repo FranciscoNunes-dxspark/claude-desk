@@ -1,8 +1,9 @@
-<!-- Switchyard app icon: the Turnout mark in ink on an amber tile. src-tauri/icons was made from this at 1024 px with
-     `npx tauri icon` (desktop files only); icon.icns from a copy with a 100 px margin
-     (macOS's icon grid); icon.ico and 32x32.png from per-size drawings: two tracks at
-     16 px, heavier strokes up to 48 px. -->
+<!-- Switchyard app icon: a lane change between two tracks, in ink on an amber tile.
+     src-tauri/icons was made from this at 1024 px with `npx tauri icon` (desktop files
+     only); icon.icns from a copy with a 100 px margin (macOS's icon grid); icon.ico and
+     32x32.png from per-size drawings: the lane change alone at 16 px, heavier strokes
+     up to 48 px. -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
 <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f7c35a"/><stop offset="1" stop-color="#e9a020"/></linearGradient></defs>
 <rect x="0" y="0" width="1024" height="1024" rx="230.4" fill="url(#g)"/><rect x="0.5" y="0.5" width="1023" height="1023" rx="229.9" fill="none" stroke="#000000" stroke-opacity="0.10"/>
-<svg x="112.63999999999999" y="112.63999999999999" width="798.72" height="798.72" viewBox="0 0 32 32" fill="none" stroke="#151a22" stroke-width="2.8" stroke-linecap="round"><path d="M5 23H27"/><path d="M7 23C11.5 23 11.5 16 16 16H27"/><path d="M16 16C20.5 16 20.5 9 25 9H27"/></svg></svg>
+<svg x="112.63999999999999" y="112.63999999999999" width="798.72" height="798.72" viewBox="0 0 32 32" fill="none" stroke="#151a22" stroke-width="3" stroke-linecap="round"><path d="M4 22H9C16 22 16 10 23 10H28"/><path d="M4 10H11"/><path d="M21 22H28"/></svg></svg>
