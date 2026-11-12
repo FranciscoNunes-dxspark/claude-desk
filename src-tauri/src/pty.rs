@@ -601,32 +601,48 @@ mod tests {
         let pair = native_pty_system()
             .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
             .unwrap();
-        let mut cmd = CommandBuilder::new("seq");
-        cmd.args(["1", "400000"]);
+        // The program waits for a line of input after its output, and gets it only once
+        // all of that output has been read: on macOS, output still unread when the
+        // program's side of the pty closes is dropped (here: the end of the last line),
+        // which would make the result depend on timing.
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", "seq 1 400000; read _"]);
         let mut child = pair.slave.spawn_command(cmd).unwrap();
         drop(pair.slave);
         let reader = pair.master.try_clone_reader().unwrap();
+        let mut writer = pair.master.take_writer().unwrap();
+        let (all_read_tx, all_read) = mpsc::channel::<()>();
         let f = Arc::new(flow(200));
         let pumping = f.clone();
         let t = Instant::now();
         let collector = std::thread::spawn(move || {
             let mut out = Vec::new();
+            let mut told = false;
             pump(reader, &pumping, |c| {
                 if ack {
                     pumping.ack(c.len() as u64);
                 }
                 out.extend(c);
+                if !told && out.ends_with(b"400000\r\n") {
+                    told = true;
+                    let _ = all_read_tx.send(());
+                }
                 true
             });
             out
         });
+        all_read.recv_timeout(Duration::from_secs(20)).expect("the output didn't all arrive within 20 s");
+        writer.write_all(b"\n").unwrap();
         let status = child.wait().unwrap();
         drop(pair.master); // EOF for the reader
         let out = String::from_utf8(collector.join().unwrap()).unwrap();
         assert!(status.success());
+        // The input line is echoed back after the numbers; it's empty, so it's dropped here.
         let lines: Vec<&str> = out.split("\r\n").filter(|l| !l.is_empty()).collect();
         assert_eq!(lines.len(), 400_000);
-        assert!(lines.iter().enumerate().all(|(i, l)| l.parse::<usize>() == Ok(i + 1)), "output out of order or corrupted");
+        if let Some((i, l)) = lines.iter().enumerate().find(|(i, l)| l.parse::<usize>() != Ok(i + 1)) {
+            panic!("line {} is {:?}, expected {}", i + 1, l, i + 1);
+        }
         assert!(t.elapsed() < Duration::from_secs(20), "took {:?}", t.elapsed());
     }
 

@@ -7,6 +7,7 @@
 //! (and so any web view) exists. Claude Code's own conversations live in ~/.claude and
 //! aren't affected either way.
 
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -18,9 +19,15 @@ pub const NEW_ID: &str = "com.dxspark.switchyard";
 
 /// The folders, per identifier, where this platform's web view and Tauri keep app data.
 fn data_dirs(id: &str) -> Vec<PathBuf> {
+    data_dirs_in(id, &|k| std::env::var_os(k))
+}
+
+/// `data_dirs` with the environment passed in, so tests needn't change the real one
+/// (which other threads read).
+fn data_dirs_in(id: &str, var: &dyn Fn(&str) -> Option<OsString>) -> Vec<PathBuf> {
     // An empty variable counts as unset (as the XDG spec says); taken as a path it
     // would point at the current folder.
-    let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let env = |k: &str| var(k).filter(|v| !v.is_empty()).map(PathBuf::from);
     let mut bases: Vec<PathBuf> = Vec::new();
     if cfg!(windows) {
         // WebView2's profile (EBWebView) lives under LOCALAPPDATA\<identifier>.
@@ -96,13 +103,23 @@ mod tests {
     }
 
     #[test]
-    fn data_dirs_are_absolute_even_with_empty_variables() {
-        for k in ["XDG_DATA_HOME", "LOCALAPPDATA", "APPDATA"] {
-            std::env::set_var(k, "");
-        }
-        let dirs = data_dirs(OLD_ID);
+    fn data_dirs_follow_the_platform_variables() {
+        let home = std::env::temp_dir();
+        let dirs = data_dirs_in(OLD_ID, &|_| Some(home.clone().into_os_string()));
         assert!(!dirs.is_empty());
+        assert!(dirs.iter().all(|d| d.starts_with(&home) && d.ends_with(OLD_ID)), "{dirs:?}");
+    }
+
+    #[test]
+    fn empty_variables_count_as_unset() {
+        // Empty values must never become relative paths (the current folder). On
+        // Windows that leaves nothing to copy; elsewhere HOME still gives the folders.
+        let home = std::env::temp_dir();
+        let dirs = data_dirs_in(OLD_ID, &|k| Some(if k == "HOME" { home.clone().into_os_string() } else { OsString::new() }));
         assert!(dirs.iter().all(|d| d.is_absolute()), "{dirs:?}");
+        if !cfg!(windows) {
+            assert!(!dirs.is_empty());
+        }
     }
 
     #[test]
