@@ -10,17 +10,18 @@
 }
 
 :root {
-  /* Signal Amber: ink and cream, one amber lamp. Amber is the brand and means
-     "needs you"; working is blue, so the two never blur. */
-  --bg: #12151a;
-  --surface: #171b21;
-  --surface-2: #1e232a;
-  --surface-3: #262c34;
+  /* Signal Amber: warm charcoal and cream, one amber lamp. Amber is the brand and
+     means "needs you"; working is blue, so the two never blur. The neutrals carry no
+     blue tint. */
+  --bg: #161513;
+  --surface: #1c1b19;
+  --surface-2: #232220;
+  --surface-3: #2c2a27;
   --hairline: #ffffff14;
   --hairline-strong: #ffffff22;
   --text: #ece7dc;
   --text-2: #a9a79f;
-  --text-3: #70737b;
+  --text-3: #77736b;
   --accent: #f2b13c;
   --accent-hi: #f6c463;
   --accent-soft: #f2b13c1f;
@@ -30,11 +31,11 @@
   --bad: #e5635a;
   --radius: 7px;
   --hover: #ffffff08;
-  --btn-hover: #2c333c;
+  --btn-hover: #35332f;
   --border-hover: #ffffff30;
   --warn-text: #f5c877;
   --scroll: #ffffff1f;
-  --float-bg: #1e232af0;
+  --float-bg: #232220f0;
   --seg-on: var(--surface-3);
   --accent-line: #f2b13c99;
   --attn: #f2b13caa;
@@ -65,11 +66,11 @@
   --surface: #f1eee6;
   --surface-2: #eae6dc;
   --surface-3: #e2ddd1;
-  --hairline: #1b202814;
-  --hairline-strong: #1b202824;
-  --text: #1b2028;
-  --text-2: #555c6a;
-  --text-3: #858993;
+  --hairline: #1f1d1a14;
+  --hairline-strong: #1f1d1a24;
+  --text: #1f1d1a;
+  --text-2: #5c5850;
+  --text-3: #8b877e;
   --accent: #b86f06;
   --accent-hi: #9c5d04;
   --accent-soft: #b86f061f;
@@ -77,11 +78,11 @@
   --accent-border: #b86f0640;
   --ok: #3f8a3a;
   --bad: #c23b32;
-  --hover: #1b20280a;
+  --hover: #1f1d1a0a;
   --btn-hover: #ddd8cc;
-  --border-hover: #1b20283a;
+  --border-hover: #1f1d1a3a;
   --warn-text: #9c5d04;
-  --scroll: #1b202826;
+  --scroll: #1f1d1a26;
   --float-bg: #fffffff2;
   --seg-on: #ffffff;
   --accent-line: #b86f06b3;
@@ -89,12 +90,12 @@
   --attn-0: #b86f0600;
   --st-working: #2f6db0;
   --st-working-line: #2f6db044;
-  --select: #1b2028;
-  --select-line: #1b202859;
-  --backdrop: #1b202840;
-  --shadow-sm: 0 1px 2px #1b202826;
-  --shadow-float: 0 12px 32px #1b202826, 0 0 0 1px #1b202814;
-  --shadow-dialog: 0 24px 64px #1b202833, 0 0 0 1px #1b20281a;
+  --select: #1f1d1a;
+  --select-line: #1f1d1a59;
+  --backdrop: #1f1d1a40;
+  --shadow-sm: 0 1px 2px #1f1d1a26;
+  --shadow-float: 0 12px 32px #1f1d1a26, 0 0 0 1px #1f1d1a14;
+  --shadow-dialog: 0 24px 64px #1f1d1a33, 0 0 0 1px #1f1d1a1a;
   color-scheme: light;
 }
 
@@ -1194,7 +1195,7 @@ body.sidebar-collapsed .ctx-line { left: 8px; right: 8px; bottom: 2px; }
 
 /* Collapsed sidebar: the plan limits as two rings, 5-hour outside, weekly inside. */
 :root { --ring-five: #d8d3c7; --ring-week: #c397d8; }
-:root[data-theme="light"] { --ring-five: #555c6a; --ring-week: #8a55a6; }
+:root[data-theme="light"] { --ring-five: #5c5850; --ring-week: #8a55a6; }
 .limit-rings { display: none; }
 body.sidebar-collapsed .limit-rings:not([hidden]) { display: grid; place-items: center; padding: 10px 0 2px; cursor: default; }
 .limit-rings svg { width: 32px; height: 32px; transform: rotate(-90deg); }
