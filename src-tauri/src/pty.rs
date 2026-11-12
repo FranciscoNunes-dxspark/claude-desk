@@ -623,7 +623,8 @@ mod tests {
                     pumping.ack(c.len() as u64);
                 }
                 out.extend(c);
-                if !told && out.ends_with(b"400000\r\n") {
+                // The last number, as a complete line (see the CR note below).
+                if !told && out.ends_with(b"\n") && out.trim_ascii_end().ends_with(b"\n400000") {
                     told = true;
                     let _ = all_read_tx.send(());
                 }
@@ -637,8 +638,11 @@ mod tests {
         drop(pair.master); // EOF for the reader
         let out = String::from_utf8(collector.join().unwrap()).unwrap();
         assert!(status.success());
-        // The input line is echoed back after the numbers; it's empty, so it's dropped here.
-        let lines: Vec<&str> = out.split("\r\n").filter(|l| !l.is_empty()).collect();
+        // Lines end in "\r\n" (the pty turns "\n" into "\r\n"), but macOS sometimes sends
+        // "\r\r\n" when its output queue is full; a terminal shows both the same, so only
+        // the "\n" counts here. The input line echoed back at the end is empty and dropped.
+        let lines: Vec<&str> =
+            out.split('\n').map(|l| l.trim_end_matches('\r')).filter(|l| !l.is_empty()).collect();
         assert_eq!(lines.len(), 400_000);
         if let Some((i, l)) = lines.iter().enumerate().find(|(i, l)| l.parse::<usize>() != Ok(i + 1)) {
             panic!("line {} is {:?}, expected {}", i + 1, l, i + 1);
