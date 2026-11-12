@@ -650,22 +650,30 @@ mod tests {
         let mut child = pair.slave.spawn_command(cmd).unwrap();
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().unwrap();
+        // Read while the program runs, as the app does. On macOS, output still unread
+        // when the program exits is discarded and a later read blocks rather than
+        // reporting the end, so reading only after `wait()` hung there.
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut out = String::new();
+            let mut buf = [0u8; 256];
+            while let Ok(n) = reader.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                out.push_str(&String::from_utf8_lossy(&buf[..n]));
+                if out.contains('\n') {
+                    break;
+                }
+            }
+            let _ = tx.send(out);
+        });
         let resize = spawn_resizer(pair.master);
         for (rows, cols) in [(30, 100), (40, 120), (50, 132)] {
             resize.send(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).unwrap();
         }
+        let out = rx.recv_timeout(Duration::from_secs(20)).expect("no output from `stty size` within 20 s");
         child.wait().unwrap();
-        let mut out = String::new();
-        let mut buf = [0u8; 256];
-        while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 {
-                break;
-            }
-            out.push_str(&String::from_utf8_lossy(&buf[..n]));
-            if out.contains('\n') {
-                break;
-            }
-        }
         assert_eq!(out.trim(), "50 132");
     }
 

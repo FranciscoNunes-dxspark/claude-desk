@@ -23,6 +23,8 @@ jobs:
         os: [ubuntu-22.04, windows-latest, macos-latest]
     name: rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # A hung test fails here instead of running into GitHub's 6-hour limit.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -51,6 +53,7 @@ jobs:
 
   ui:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
