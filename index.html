@@ -25,6 +25,8 @@
       <symbol id="i-history" viewBox="0 0 16 16"><path d="M2.8 8a5.2 5.2 0 1 0 1.5-3.7M2.5 2.5v2.8h2.8M8 5v3.2l2 1.3" /></symbol>
       <symbol id="i-sidebar" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5" /><path d="M6.5 3v10" /></symbol>
       <symbol id="i-diff" viewBox="0 0 16 16"><path d="M4.5 2.5v6M1.5 5.5h6M8.5 12.5h6M11.5 3.5l-6 9" /></symbol>
+      <symbol id="i-todo" viewBox="0 0 16 16"><path d="M2.5 4l1.5 1.5L6.5 3M2.5 10l1.5 1.5L6.5 9M8.5 4.5h5M8.5 10.5h5" /></symbol>
+      <symbol id="i-doc" viewBox="0 0 16 16"><path d="M9.5 1.5H4A1.5 1.5 0 0 0 2.5 3v10A1.5 1.5 0 0 0 4 14.5h8a1.5 1.5 0 0 0 1.5-1.5V5.5zM9.5 1.5v4h4M5.5 8.5h5M5.5 11h3.5" /></symbol>
       <symbol id="i-broadcast" viewBox="0 0 16 16"><circle cx="8" cy="8" r="1.6" /><path d="M5.2 5.2a4 4 0 0 0 0 5.6M10.8 5.2a4 4 0 0 1 0 5.6M3.1 3.1a7 7 0 0 0 0 9.8M12.9 3.1a7 7 0 0 1 0 9.8" /></symbol>
       <symbol id="i-command" viewBox="0 0 16 16"><path d="M6 6h4v4H6zM6 6V4.5A1.5 1.5 0 1 0 4.5 6H6M10 6V4.5A1.5 1.5 0 1 1 11.5 6H10M6 10v1.5A1.5 1.5 0 1 1 4.5 10H6M10 10v1.5a1.5 1.5 0 1 0 1.5-1.5H10" /></symbol>
       <symbol id="i-logo" viewBox="0 0 32 32"><path d="M4 22H9C16 22 16 10 23 10H28" /><path d="M4 10H11" /><path d="M21 22H28" /></symbol>
@@ -70,6 +72,7 @@
         <span id="tb-split-label" class="tb-split-label" data-tauri-drag-region></span>
         <button id="tb-broadcast" class="icon-btn" title="Broadcast a prompt"><svg class="ic"><use href="#i-broadcast" /></svg></button>
         <button id="tb-changes" class="icon-btn" title="Changes"><svg class="ic"><use href="#i-diff" /></svg></button>
+        <button id="tb-docs" class="icon-btn" title="Documents"><svg class="ic"><use href="#i-doc" /></svg></button>
         <button id="tb-search" class="icon-btn" title="Search terminal"><svg class="ic"><use href="#i-search" /></svg></button>
         <div id="layout-switch" class="layout-switch" role="group" aria-label="Layout">
           <button data-layout="tabs" title="Tabs: one session at a time"><svg class="ic"><use href="#i-l-tabs" /></svg></button>
@@ -107,6 +110,35 @@
         <div id="ch-info" class="ch-info"></div>
         <ul id="ch-files" class="ch-files"></ul>
         <pre id="ch-diff" class="ch-diff" hidden></pre>
+        <footer class="ch-foot">
+          <div id="ch-review" class="ch-review" hidden>
+            <span id="ch-review-count"></span>
+            <button id="ch-review-discard" class="btn small">Discard</button>
+            <button id="ch-review-send" class="btn small primary">Send to Claude</button>
+          </div>
+          <div id="ch-msg" class="ch-msg" hidden></div>
+          <div class="ch-ship">
+            <button id="ch-commit" class="btn small" disabled>Commit…</button>
+            <button id="ch-push" class="btn small" hidden>Push</button>
+            <span class="spacer"></span>
+            <button id="ch-pr" class="btn small" title="Ask Claude to push the branch and open a pull request" hidden>Open PR with Claude</button>
+          </div>
+        </footer>
+      </aside>
+
+      <aside id="docs" class="changes docs" hidden>
+        <header>
+          <span id="dc-title" class="ch-title">Documents</span>
+          <button id="dc-wide" class="icon-btn" title="Widen"><svg class="ic"><use href="#i-max" /></svg></button>
+          <button id="dc-close" class="icon-btn" title="Close"><svg class="ic"><use href="#i-x" /></svg></button>
+        </header>
+        <div id="dc-info" class="ch-info"></div>
+        <ul id="dc-list" class="ch-files dc-list"></ul>
+        <section id="dc-view" class="dc-view" hidden>
+          <div class="dc-bar"><span id="dc-name" class="dc-name"></span><span id="dc-actions" class="dc-actions"></span></div>
+          <div id="dc-note" class="dc-note" hidden></div>
+          <div id="dc-body" class="dc-body"></div>
+        </section>
       </aside>
 
       <div id="searchbar" class="searchbar" hidden>
@@ -267,6 +299,26 @@
       </form>
     </dialog>
 
+    <dialog id="commit-dialog">
+      <form method="dialog" id="commit-form">
+        <h2>Commit changes</h2>
+        <div class="field">
+          <span class="label">Message</span>
+          <textarea id="cm-text" rows="4" placeholder="Describe the change" spellcheck="true"></textarea>
+          <span id="cm-hint" class="hint"></span>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="cm-push" />
+          <span class="switch"></span>
+          <span>Push after committing</span>
+        </label>
+        <menu>
+          <button type="button" class="btn cancel">Cancel</button>
+          <button value="ok" class="btn primary">Commit <kbd id="cm-kbd">⌘↵</kbd></button>
+        </menu>
+      </form>
+    </dialog>
+
     <dialog id="session-dialog">
       <form method="dialog">
         <h2>Session</h2>
@@ -314,5 +366,6 @@
       <button type="button" data-win="close" class="w-close" aria-label="Close" title="Close"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M.5 .5l9 9M9.5 .5l-9 9" /></svg></button>
     </div>
     <div id="limit-pop" class="limit-pop" role="tooltip" hidden></div>
+    <div id="todo-pop" class="limit-pop todo-pop" hidden></div>
   </body>
 </html>

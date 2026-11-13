@@ -44,6 +44,20 @@ function fakeBackend() {
       if (cmd === "pty_write" && window.__opt.writeFails) throw "session not found";
       if (cmd === "plugin:dialog|message") return window.__opt.dialogAnswer;
       if (cmd === "claude_version") return "2.0.0 (Claude Code)";
+      if (cmd === "git_changes") return window.__git ?? { branch: "main", files: [], upstream: null, ahead: 0, hasRemote: false };
+      if (cmd === "git_diff") return "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,3 +1,3 @@\n one\n-two\n+2\n three\n";
+      if (cmd === "git_commit" || cmd === "git_push") {
+        window.__calls.push([cmd, args.message ?? null]);
+        if (cmd === "git_commit") window.__git = { ...window.__git, files: [], ahead: window.__git.ahead + 1 };
+        if (cmd === "git_push") window.__git = { ...window.__git, ahead: 0, upstream: "origin/main" };
+        return cmd === "git_commit" ? "abc1234 Fix it" : "";
+      }
+      if (cmd === "conversation_activity") return { docs: window.__docs?.[args.id] ?? [], todos: window.__todos?.[args.id] ?? [] };
+      if (cmd === "read_document") {
+        const text = window.__docText?.[args.path];
+        if (text == null) throw "The file no longer exists.";
+        return { text, modified: text.length };
+      }
       return null;
     },
   };
@@ -209,6 +223,97 @@ const scenarios = {
     await p.waitForTimeout(400);
     const n = await tabs(p);
     return [n === 1, `${n} sessions left of 3 after two closes`];
+  }],
+  "the documents panel shows a session's plan, safely": [2, async (p) => {
+    await p.evaluate(() => {
+      const doc = (kind, path, at, extra = {}) => ({ kind, path, url: null, title: null, description: null, text: null, at, writes: 1, ...extra });
+      window.__docText = { "/w/a/NOTES.md": "# Notes\n\n- one <img src=x onerror=\"window.__xss=1\">" };
+      window.__docs = { a: [
+        doc("plan", null, "2026-11-13T10:05:00Z", { text: "# The plan\n\n1. Read the code\n2. Fix it" }),
+        doc("markdown", "/w/a/NOTES.md", "2026-11-13T10:00:00Z"),
+      ] };
+    });
+    await p.waitForTimeout(2300); // one poll
+    await p.click("#tb-docs");
+    await p.waitForTimeout(300);
+    const plan = await p.evaluate(() => ({ items: document.querySelectorAll("#dc-list li").length, h1: document.querySelector("#dc-body h1")?.textContent }));
+    await p.click("#dc-list li:nth-child(2)");
+    await p.waitForTimeout(300);
+    const notes = await p.evaluate(() => ({ li: document.querySelector("#dc-body li")?.textContent.trim(), xss: window.__xss ?? 0 }));
+    const ok = plan.items === 2 && plan.h1 === "The plan" && notes.li === "one" && notes.xss === 0;
+    return [ok, `${plan.items} listed, plan "${plan.h1}", notes "${notes.li}", script ran: ${notes.xss}`];
+  }],
+  "a new document in another session badges its tab": [2, async (p) => {
+    await p.click("#tb-docs");
+    await p.evaluate(() => { window.__docs = { b: [] }; });
+    await p.waitForTimeout(2300); // b's conversation read once: nothing new yet
+    const before = await p.evaluate(() => !document.querySelector("#tabs li:nth-child(2) .doc-badge").hidden);
+    await p.evaluate(() => {
+      window.__docs.b = [{ kind: "plan", path: null, url: null, title: null, description: null, text: "# B", at: "2026-11-13T11:00:00Z", writes: 1 }];
+    });
+    await p.waitForTimeout(2300);
+    const after = await p.evaluate(() => !document.querySelector("#tabs li:nth-child(2) .doc-badge").hidden);
+    await p.click("#tabs li:nth-child(2)");
+    await p.waitForTimeout(300);
+    const seen = await p.evaluate(() => document.querySelector("#tabs li:nth-child(2) .doc-badge").hidden && document.querySelector("#dc-body h1")?.textContent === "B");
+    return [!before && after && seen, `before ${before}, after ${after}, cleared and shown ${seen}`];
+  }],
+  "the to-do list shows progress and the current step": [1, async (p) => {
+    await p.evaluate(() => {
+      window.__todos = { a: [
+        { id: "1", subject: "Read the code", status: "completed", activeForm: "Reading the code" },
+        { id: "2", subject: "Fix the bug", status: "in_progress", activeForm: "Fixing the bug" },
+        { id: "3", subject: "Run tests", status: "pending", activeForm: null },
+      ] };
+    });
+    await p.waitForTimeout(2300);
+    const tab = await p.evaluate(() => document.querySelector("#tabs li .todo-count").textContent);
+    const chip = await p.evaluate(() => document.querySelector(".term.active .todo-chip").textContent);
+    await p.click(".term.active .todo-chip");
+    const items = await p.evaluate(() => [...document.querySelectorAll("#todo-pop li")].map((li) => `${li.dataset.status}:${li.textContent}`));
+    await p.keyboard.press("Escape");
+    const closed = await p.evaluate(() => document.querySelector("#todo-pop").hidden);
+    const ok = tab === "1/3" && chip === "1/3Fixing the bug" && items.length === 3 && items[1] === "in_progress:Fixing the bug" && closed;
+    return [ok, `tab "${tab}", chip "${chip}", ${items.join(" | ")}, closes ${closed}`];
+  }],
+  "a comment on a diff line goes to Claude with its place": [1, async (p) => {
+    await p.evaluate(() => {
+      window.__git = { branch: "main", files: [{ path: "src/a.ts", status: " M", added: 1, removed: 1, binary: false }], upstream: "origin/main", ahead: 0, hasRemote: true };
+    });
+    await p.click("#tb-changes");
+    await p.waitForTimeout(300);
+    await p.click("#ch-files li");
+    await p.waitForTimeout(300);
+    await p.hover('#ch-diff div[data-ln="2"]');
+    await p.click('#ch-diff div[data-ln="2"] .cmt-add');
+    await p.keyboard.type("Name it two");
+    await p.keyboard.press("Control+Enter");
+    const saved = await p.evaluate(() => ({ n: document.querySelectorAll(".cmt-saved").length, bar: document.querySelector("#ch-review-count").textContent }));
+    await p.evaluate(() => { window.__calls = []; });
+    await p.click("#ch-review-send");
+    await p.waitForTimeout(400);
+    const sent = await p.evaluate(() => window.__calls.filter((c) => c[0] === "pty_write").map((c) => c[2]).join(""));
+    const ok = saved.n === 1 && sent.includes("src/a.ts:2") && sent.includes("> 2") && sent.includes("Name it two") && sent.endsWith("\r");
+    return [ok, `${saved.n} saved ("${saved.bar}"), sent ${JSON.stringify(sent.slice(0, 120))}`];
+  }],
+  "commit and push from the changes panel": [1, async (p) => {
+    await p.evaluate(() => {
+      window.__git = { branch: "main", files: [{ path: "src/a.ts", status: " M", added: 1, removed: 1, binary: false }], upstream: "origin/main", ahead: 1, hasRemote: true };
+    });
+    await p.click("#tb-changes");
+    await p.waitForTimeout(300);
+    const pushLabel = await p.evaluate(() => document.querySelector("#ch-push").textContent);
+    await p.click("#ch-commit");
+    await p.fill("#cm-text", "Fix it");
+    await p.check("#cm-push", { force: true });
+    await p.evaluate(() => { window.__calls = []; });
+    await p.focus("#cm-text");
+    await p.keyboard.press("Control+Enter");
+    await p.waitForTimeout(500);
+    const calls = await p.evaluate(() => window.__calls.filter((c) => c[0].startsWith("git_")).map((c) => c.join(":")));
+    const after = await p.evaluate(() => ({ msg: document.querySelector("#ch-msg").textContent, push: document.querySelector("#ch-push").hidden, commit: document.querySelector("#ch-commit").disabled }));
+    const ok = pushLabel === "Push ↑1" && calls.join(",") === "git_commit:Fix it,git_push:" && after.push && after.commit;
+    return [ok, `push showed "${pushLabel}", ran ${calls.join(", ")}, then "${after.msg}", push hidden ${after.push}, commit disabled ${after.commit}`];
   }],
 };
 

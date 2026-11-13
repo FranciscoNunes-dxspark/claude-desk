@@ -1,5 +1,6 @@
 use tauri::Manager;
 
+mod docs;
 mod extras;
 mod git;
 mod migrate;
@@ -16,6 +17,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(pty::PtyState::default())
+        // Artifact previews in the documents panel (docs::preview).
+        .register_uri_scheme_protocol("swpreview", |_ctx, request| docs::preview(&request))
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 // Windows: the app draws its own title bar and window buttons (index.html
@@ -44,12 +47,16 @@ pub fn run() {
             git::worktree_info,
             git::git_changes,
             git::git_diff,
+            git::git_commit,
+            git::git_push,
             extras::conversation_exists,
             extras::git_branch,
             extras::save_clipboard_image,
             extras::read_clipboard_text,
             extras::write_clipboard_text,
             usage::conversation_usage,
+            docs::conversation_activity,
+            docs::read_document,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

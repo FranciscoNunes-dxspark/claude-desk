@@ -1,5 +1,6 @@
 //! Git helpers for the UI: the repository root, the folder Claude Code uses for a
-//! `--worktree`, and the changes panel (changed files and their diffs).
+//! `--worktree`, and the changes panel (changed files and their diffs, committing and
+//! pushing them).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -44,8 +45,12 @@ pub fn worktree_info(cwd: String, name: String) -> Option<WorktreeInfo> {
 }
 
 fn git(dir: &str, args: &[&str]) -> Result<Vec<u8>, String> {
+    run_git(git_command(dir, args))
+}
+
+fn git_command(dir: &str, args: &[&str]) -> Command {
     let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(dir).args(args);
+    cmd.arg("-C").arg(dir).args(args).stdin(std::process::Stdio::null());
     // Keep git's output stable and free of pagers/colour regardless of user config.
     cmd.env("GIT_PAGER", "cat").env("LC_ALL", "C").env("GIT_OPTIONAL_LOCKS", "0");
     #[cfg(windows)]
@@ -53,6 +58,10 @@ fn git(dir: &str, args: &[&str]) -> Result<Vec<u8>, String> {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
+    cmd
+}
+
+fn run_git(mut cmd: Command) -> Result<Vec<u8>, String> {
     let out = cmd.output().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             "git isn't installed (or isn't on PATH)".to_string()
@@ -83,6 +92,12 @@ pub struct Change {
 pub struct Changes {
     branch: Option<String>,
     files: Vec<Change>,
+    /// The branch it pushes to, if it has one.
+    upstream: Option<String>,
+    /// Commits not pushed yet (all of them when there's no upstream).
+    ahead: u32,
+    /// Whether any remote is set up, so pushing can work at all.
+    has_remote: bool,
 }
 
 fn count_lines(path: &Path) -> Option<u64> {
@@ -159,7 +174,13 @@ pub async fn git_changes(dir: String) -> Result<Changes, String> {
             files.push(Change { path, status: code, added, removed, binary });
         }
         files.sort_by(|a, b| a.path.cmp(&b.path));
-        Ok(Changes { branch, files })
+        let text = |b: Vec<u8>| String::from_utf8_lossy(&b).trim().to_string();
+        let upstream = git(&dir, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).ok().map(text);
+        let has_remote = git(&dir, &["remote"]).is_ok_and(|r| !r.trim_ascii().is_empty());
+        // Unpushed: against the upstream, or (no upstream yet) commits on no remote branch.
+        let range = if upstream.is_some() { vec!["rev-list", "--count", "@{u}..HEAD"] } else { vec!["rev-list", "--count", "HEAD", "--not", "--remotes"] };
+        let ahead = git(&dir, &range).ok().and_then(|b| text(b).parse().ok()).unwrap_or(0);
+        Ok(Changes { branch, files, upstream, ahead, has_remote })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -205,6 +226,59 @@ pub async fn git_diff(dir: String, path: String, untracked: bool) -> Result<Stri
     .map_err(|e| e.to_string())?
 }
 
+/// Commits every change in the working tree (`git add -A`, then `git commit`).
+/// Returns git's one-line summary of the commit.
+#[tauri::command]
+pub async fn git_commit(dir: String, message: String) -> Result<String, String> {
+    if message.trim().is_empty() {
+        return Err("The commit message is empty.".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        git(&dir, &["add", "-A"])?;
+        let out = git(&dir, &["commit", "-q", "-m", message.trim()])?;
+        let summary = git(&dir, &["log", "-1", "--format=%h %s"]).unwrap_or(out);
+        Ok(String::from_utf8_lossy(&summary).trim().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Pushes the current branch: to its upstream, or (the first push) to `origin`, or the
+/// only remote, setting it as the upstream. Never asks for anything: a push that needs
+/// a password or a host-key answer fails with git's message instead of hanging.
+#[tauri::command]
+pub async fn git_push(dir: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let has_upstream = git(&dir, &["rev-parse", "--abbrev-ref", "@{u}"]).is_ok();
+        let args: Vec<String> = if has_upstream {
+            vec!["push".into()]
+        } else {
+            let remotes = String::from_utf8_lossy(&git(&dir, &["remote"])?).into_owned();
+            let remotes: Vec<&str> = remotes.lines().map(str::trim).filter(|r| !r.is_empty()).collect();
+            let remote = if remotes.contains(&"origin") { "origin" } else if remotes.len() == 1 { remotes[0] } else {
+                return Err(if remotes.is_empty() { "This repository has no remote to push to.".into() } else { "This branch has no upstream and there's no \"origin\" remote to push it to.".into() });
+            };
+            vec!["push".into(), "-u".into(), remote.into(), "HEAD".into()]
+        };
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let mut cmd = git_command(&dir, &args);
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        if std::env::var_os("GIT_SSH_COMMAND").is_none() {
+            cmd.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
+        }
+        let out = cmd.output().map_err(|e| format!("couldn't run git: {e}"))?;
+        // git push reports on stderr either way.
+        let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        if out.status.success() {
+            Ok(msg)
+        } else {
+            Err(msg)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,6 +314,30 @@ mod tests {
         assert!(diff.contains("-two") && diff.contains("+2") && diff.contains("+four"), "{diff}");
         let untracked = tauri::async_runtime::block_on(git_diff(d.clone(), "new file.txt".into(), true)).unwrap();
         assert!(untracked.contains("+hello") && untracked.contains("+world"), "{untracked}");
+
+        assert_eq!((c.upstream.as_deref(), c.ahead, c.has_remote), (None, 1, false));
+
+        // Commit everything, then push to a bare repository as the first push.
+        let summary = tauri::async_runtime::block_on(git_commit(d.clone(), "  Second  ".into()));
+        // Commits need an identity; CI machines may have none configured.
+        if summary.is_err() {
+            run(&dir, &["config", "user.email", "t@t"]);
+            run(&dir, &["config", "user.name", "t"]);
+        }
+        let summary = summary.or_else(|_| tauri::async_runtime::block_on(git_commit(d.clone(), "Second".into()))).unwrap();
+        assert!(summary.ends_with(" Second"), "{summary}");
+        let c = tauri::async_runtime::block_on(git_changes(d.clone())).unwrap();
+        assert_eq!((c.files.len(), c.ahead), (0, 2));
+        assert!(tauri::async_runtime::block_on(git_commit(d.clone(), " ".into())).is_err());
+        assert!(tauri::async_runtime::block_on(git_push(d.clone())).is_err(), "no remote yet");
+        let bare = dir.with_extension("remote.git");
+        let _ = std::fs::remove_dir_all(&bare);
+        run(&dir, &["init", "-q", "--bare", &bare.to_string_lossy()]);
+        run(&dir, &["remote", "add", "origin", &bare.to_string_lossy()]);
+        tauri::async_runtime::block_on(git_push(d.clone())).unwrap();
+        let c = tauri::async_runtime::block_on(git_changes(d.clone())).unwrap();
+        assert_eq!((c.upstream.as_deref(), c.ahead, c.has_remote), (Some("origin/main"), 0, true));
+        let _ = std::fs::remove_dir_all(&bare);
 
         let wt = worktree_info(dir.join("src").to_string_lossy().into_owned(), "feature".into()).unwrap();
         assert!(wt.path.ends_with(&format!(".claude{}worktrees{}feature", std::path::MAIN_SEPARATOR, std::path::MAIN_SEPARATOR)));

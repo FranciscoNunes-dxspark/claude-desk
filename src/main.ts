@@ -18,6 +18,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
 
+import { type Doc, type Todo, todoSummary, docDetail, docKey, docName, firstHeading, isArtifactUrl, needsClaudeRuntime, pageTitle, pageTitles, previewUrl, renderMarkdown } from "./docs";
 import { SEARCH_DECORATIONS, TERMINAL_THEMES, type ThemeName } from "./themes";
 
 // ---------- persisted settings ----------
@@ -369,6 +370,13 @@ class Session {
   usage: Usage | null = null;
   /** Claude Code's own live status (its status line input, see `pty_status`). */
   status: ClaudeStatus | null = null;
+  /** Documents each of this session's conversations produced (see `conversation_documents`).
+   *  Kept across /clear, which is how plan mode often goes on to carry out a plan. */
+  private docsByConv = new Map<string, Doc[]>();
+  /** How many writes of each document the user has seen in the panel. */
+  private docsSeen = new Map<string, number>();
+  /** Claude's to-do list in the current conversation. */
+  todos: Todo[] = [];
   /** Claude Code's own status reports (OSC 7501), per id ("" is the main thread). */
   private program = new Map<string, ProgramEntry>();
   /** Set once Claude Code has reported status; the output heuristic is then off. */
@@ -399,6 +407,7 @@ class Session {
         <span class="pane-path"></span>
         <span class="branch" hidden></span>
         <span class="state-label" hidden></span>
+        <button class="todo-chip" hidden></button>
         <span class="usage" hidden></span>
         <span class="chips-row"></span>
         <button class="icon-btn" data-act="zoom" title="Maximise">${icon("max")}</button>
@@ -408,6 +417,10 @@ class Session {
       <div class="term-body"><div class="term-host"></div></div>`;
     this.el.querySelector(".pane-path")!.textContent = dirOf(opts);
     this.el.querySelector(".chips-row")!.append(...chipsFor(opts));
+    this.el.querySelector(".todo-chip")!.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleTodoPop(this, e.currentTarget as HTMLElement);
+    });
     this.el.querySelector('[data-act="zoom"]')!.addEventListener("click", () => toggleZoom(this));
     this.el.querySelector('[data-act="restart"]')!.addEventListener("click", () => this.restart());
     this.el.querySelector('[data-act="close"]')!.addEventListener("click", () => closeSession(this));
@@ -518,8 +531,10 @@ class Session {
       <span class="dot"></span>
       <span class="initial"></span>
       <span class="meta"><span class="name"></span><span class="path"></span><span class="status-line" hidden></span></span>
+      <span class="todo-count" hidden></span>
       <kbd></kbd>
       <button class="icon-btn close" title="Close session">${icon("x")}</button>
+      <span class="doc-badge" hidden title="New document: open the documents panel">${icon("doc")}</span>
       <span class="ctx-line" hidden><i></i></span>`;
     this.tab.querySelector(".path")!.textContent = `\u200E${dirOf(opts)}\u200E`;
     this.tab.addEventListener("click", () => {
@@ -620,7 +635,7 @@ class Session {
       this.flagAttention("finished", shown?.title);
     }
     if (prev !== next && changesOpen() && this === active) scheduleChangesRefresh(300);
-    if (prev !== next) void this.refreshStatus().then(() => this.refreshUsage());
+    if (prev !== next) void this.refreshStatus().then(() => this.refreshUsage()).then(() => this.refreshDocs());
   }
 
   get running() {
@@ -643,6 +658,69 @@ class Session {
       saveWorkspace();
     }
     this.showUsage();
+  }
+
+  /** The documents of all this session's conversations, newest first. */
+  get docs(): Doc[] {
+    const all = new Map<string, Doc>();
+    for (const list of this.docsByConv.values())
+      for (const d of list) {
+        const prev = all.get(docKey(d));
+        if (!prev || (d.at ?? "") >= (prev.at ?? "")) all.set(docKey(d), prev ? { ...d, writes: d.writes + prev.writes } : d);
+      }
+    return [...all.values()].sort((a, b) => (b.at ?? "").localeCompare(a.at ?? ""));
+  }
+
+  /** Reads what the conversation produced; badges the tab when there's something new. */
+  async refreshDocs() {
+    const id = this.opts.conversationId;
+    if (!id) return;
+    const act = await invoke<{ docs: Doc[]; todos: Todo[] }>("conversation_activity", { cwd: dirOf(this.opts), id }).catch(() => null);
+    if (!act || id !== this.opts.conversationId) return;
+    if (JSON.stringify(act.todos) !== JSON.stringify(this.todos)) {
+      this.todos = act.todos;
+      this.showTodos();
+    }
+    const list = act.docs;
+    const first = !this.docsByConv.has(id);
+    if (!first && JSON.stringify(list) === JSON.stringify(this.docsByConv.get(id))) return;
+    this.docsByConv.set(id, list);
+    // What a conversation already had when the app first read it isn't news.
+    if (first) for (const d of list) this.docsSeen.set(docKey(d), Math.max(this.docsSeen.get(docKey(d)) ?? 0, d.writes));
+    if (docsOpen() && docsFor === this) renderDocs(false);
+    this.showDocBadge();
+  }
+
+  /** The to-do progress on the tab and the pane header. */
+  showTodos() {
+    const sum = todoSummary(this.todos);
+    const count = this.tab.querySelector<HTMLElement>(".todo-count")!;
+    const chip = this.el.querySelector<HTMLButtonElement>(".todo-chip")!;
+    count.hidden = chip.hidden = !sum;
+    if (sum) {
+      const all = sum.done === sum.total;
+      count.textContent = `${sum.done}/${sum.total}`;
+      count.title = all ? "To-do list done" : `To-do list: ${sum.done} of ${sum.total} done${sum.now ? `. Now: ${sum.now}` : ""}`;
+      count.classList.toggle("all", all);
+      chip.classList.toggle("all", all);
+      chip.innerHTML = `${icon("todo")}<b></b><span></span>`;
+      chip.querySelector("b")!.textContent = `${sum.done}/${sum.total}`;
+      chip.querySelector("span")!.textContent = sum.now ?? (all ? "All done" : "To do");
+      chip.title = "Show Claude's to-do list";
+    }
+    if (todoPopFor === this) renderTodoPop();
+  }
+
+  /** Marks every document as seen (the panel shows them). */
+  seeDocs() {
+    for (const d of this.docs) this.docsSeen.set(docKey(d), d.writes);
+    this.showDocBadge();
+  }
+
+  showDocBadge() {
+    const news = this.docs.some((d) => d.writes > (this.docsSeen.get(docKey(d)) ?? 0));
+    this.tab.querySelector<HTMLElement>(".doc-badge")!.hidden = !news;
+    if (this === active) $("#tb-docs").classList.toggle("news", news);
   }
 
   /** Reads the conversation's token usage and shows it if it changed. */
@@ -1177,6 +1255,8 @@ function activate(s: Session, focus = true) {
   saveWorkspace();
   if (prev !== s && !searchBar.hidden) moveSearchTo(s, prev);
   if (prev !== s && changesOpen()) scheduleChangesRefresh();
+  if (prev !== s && docsOpen()) renderDocs(true);
+  s.showDocBadge();
   updateTopbar();
   if (!focus) return;
   requestAnimationFrame(() => {
@@ -1544,7 +1624,8 @@ setInterval(renderLimits, 60_000); // drop a window once it has reset
 // conversation since the last read.
 setInterval(() => {
   if (document.hidden) return;
-  for (const s of sessions) if (s.running) void s.refreshStatus().then(() => s.refreshUsage());
+  for (const s of sessions) if (s.running) void s.refreshStatus().then(() => s.refreshUsage()).then(() => s.refreshDocs());
+  if (docsOpen() && windowFocused) void refreshDocView();
 }, 2000);
 
 // ---------- git branch ----------
@@ -2050,7 +2131,7 @@ async function checkCli() {
 
 function isAppShortcut(e: KeyboardEvent): boolean {
   const mod = isMac ? e.metaKey : e.ctrlKey && e.shiftKey;
-  if (mod && ["KeyT", "KeyW", "Comma", "Backslash", "KeyF", "Enter", "KeyB", "KeyK", "KeyG", "KeyJ", "KeyO"].includes(e.code))
+  if (mod && ["KeyT", "KeyW", "Comma", "Backslash", "KeyF", "Enter", "KeyB", "KeyK", "KeyG", "KeyD", "KeyJ", "KeyO"].includes(e.code))
     return true;
   if (e.ctrlKey && e.key === "Tab") return true;
   if (mod && /^Digit[1-9]$/.test(e.code)) return true;
@@ -2067,6 +2148,7 @@ window.addEventListener("keydown", (e) => {
   else if (e.code === "KeyB") toggleSidebar();
   else if (e.code === "KeyK") openPalette();
   else if (e.code === "KeyG" && active) toggleChanges();
+  else if (e.code === "KeyD" && active) toggleDocs();
   else if (e.code === "KeyJ") openBroadcast();
   else if (e.code === "KeyO") void openHistory();
   else if (e.code === "Enter" && active) toggleZoom(active);
@@ -2090,6 +2172,29 @@ interface GitChange {
   binary: boolean;
 }
 
+interface GitChanges {
+  branch: string | null;
+  files: GitChange[];
+  upstream: string | null;
+  ahead: number;
+  hasRemote: boolean;
+}
+
+/** A comment on one line of a diff, waiting to be sent to the session. */
+interface ReviewComment {
+  file: string;
+  /** "42" for the new file's line 42, "-17" for the old file's (a removed line). */
+  line: string;
+  code: string;
+  text: string;
+}
+
+/** Review comments per session, until they're sent or discarded. */
+const reviews = new WeakMap<Session, ReviewComment[]>();
+/** The last `git_changes` result shown, for the commit and push buttons. */
+let changesState: GitChanges | null = null;
+let shipBusy = false;
+
 let changesFor: Session | null = null;
 let changesSelected: string | null = null;
 /** What the list and diff currently show, so unchanged refreshes skip rebuilding the DOM
@@ -2106,6 +2211,7 @@ const changesOpen = () => document.body.classList.contains("changes-open");
 
 function toggleChanges(force?: boolean) {
   const open = force ?? !changesOpen();
+  if (open && docsOpen()) toggleDocs(false);
   document.body.classList.toggle("changes-open", open);
   $("#changes").hidden = !open;
   $("#tb-changes").classList.toggle("on", open);
@@ -2136,16 +2242,22 @@ async function refreshChanges(reset: boolean) {
     changesSelected = null;
     changesShown = "";
     diffShown = "";
+    changesState = null;
+    renderShip();
+    renderReview();
+    showShipMsg("");
     $("#ch-diff").textContent = "";
     $("#ch-diff").hidden = true;
   }
   changesBusy = true;
   const t0 = performance.now();
   try {
-    const res = await invoke<{ branch: string | null; files: GitChange[] }>("git_changes", { dir: dirOf(s.opts) });
+    const res = await invoke<GitChanges>("git_changes", { dir: dirOf(s.opts) });
     changesCostMs = performance.now() - t0;
     changesLast = performance.now();
     if (changesFor !== s) return;
+    changesState = res;
+    renderShip();
     $("#ch-title").textContent = `Changes · ${displayName(s.opts)}`;
     info.textContent = res.files.length
       ? `${res.files.length} file${res.files.length === 1 ? "" : "s"} changed${res.branch ? ` on ${res.branch}` : ""}`
@@ -2192,6 +2304,8 @@ async function refreshChanges(reset: boolean) {
       changesShown = "";
       const msg = String(err);
       info.textContent = /not a git repository/i.test(msg) ? "This folder isn't a git repository." : msg;
+      changesState = null;
+      renderShip();
     }
   } finally {
     changesBusy = false;
@@ -2209,15 +2323,239 @@ async function showDiff(s: Session, f: GitChange) {
   if (key === diffShown) return; // unchanged since the last refresh
   diffShown = key;
   const frag = document.createDocumentFragment();
+  // Line numbers, from each hunk's header, so a comment can say where it is.
+  let oldNo = 0;
+  let newNo = 0;
+  let inHunk = false;
   for (const line of text.split("\n")) {
     const div = document.createElement("div");
-    div.className =
-      line.startsWith("@@") ? "hunk" : line.startsWith("+++") || line.startsWith("---") ? "meta" : line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : line.startsWith("diff ") || line.startsWith("index ") ? "meta" : "";
+    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line);
+    if (hunk) {
+      [oldNo, newNo, inHunk] = [Number(hunk[1]), Number(hunk[2]), true];
+      div.className = "hunk";
+    } else if (!inHunk || line.startsWith("diff ") || line.startsWith("\\")) {
+      div.className = line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("+++") || line.startsWith("---") ? "meta" : "";
+      if (line.startsWith("diff ")) inHunk = false;
+    } else if (line.startsWith("+")) {
+      div.className = "add";
+      div.dataset.ln = String(newNo++);
+    } else if (line.startsWith("-")) {
+      div.className = "del";
+      div.dataset.ln = `-${oldNo++}`;
+    } else {
+      div.dataset.ln = String(newNo++);
+      oldNo++;
+    }
     div.textContent = line || " ";
     frag.appendChild(div);
   }
   pre.replaceChildren(frag);
+  showSavedComments(s, f.path);
 }
+
+// ---------- review comments on the diff ----------
+// Hover a line and click + to comment on it; the comments go to the session as one prompt.
+
+const commentBtn = document.createElement("button");
+commentBtn.className = "cmt-add";
+commentBtn.type = "button";
+commentBtn.title = "Comment on this line";
+commentBtn.textContent = "+";
+
+$("#ch-diff").addEventListener("mouseover", (e) => {
+  const line = (e.target as HTMLElement).closest<HTMLElement>("div[data-ln]");
+  if (line && commentBtn.parentElement !== line && changesFor?.running) line.prepend(commentBtn);
+});
+commentBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const line = commentBtn.parentElement;
+  if (line) openCommentEditor(line);
+});
+
+const lineLabel = (ln: string) => (ln.startsWith("-") ? `${ln.slice(1)} (removed)` : ln);
+const lineCode = (line: HTMLElement) => (line.lastChild?.textContent ?? line.textContent ?? "").slice(1);
+
+function openCommentEditor(line: HTMLElement) {
+  const s = changesFor;
+  const file = changesSelected;
+  if (!s || !file) return;
+  line.parentElement?.querySelector(".cmt-editor")?.remove();
+  const box = document.createElement("div");
+  box.className = "cmt-editor";
+  box.innerHTML = `<textarea rows="3" placeholder="Comment for Claude on line ${lineLabel(line.dataset.ln!)}"></textarea><span class="cmt-btns"><button type="button" class="btn small">Cancel</button><button type="button" class="btn small primary">Add comment</button></span>`;
+  const ta = box.querySelector("textarea")!;
+  const [cancel, add] = box.querySelectorAll("button");
+  const save = () => {
+    const text = ta.value.trim();
+    if (!text) return;
+    const list = reviews.get(s) ?? [];
+    list.push({ file, line: line.dataset.ln!, code: lineCode(line), text });
+    reviews.set(s, list);
+    box.remove();
+    showSavedComments(s, file);
+    renderReview();
+  };
+  cancel.addEventListener("click", () => box.remove());
+  add.addEventListener("click", save);
+  ta.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      save();
+    } else if (e.key === "Escape") box.remove();
+  });
+  line.after(box);
+  ta.focus();
+}
+
+/** Shows the saved comments of `file` under their lines. */
+function showSavedComments(s: Session, file: string) {
+  const pre = $("#ch-diff");
+  pre.querySelectorAll(".cmt-saved").forEach((x) => x.remove());
+  const list = (reviews.get(s) ?? []).filter((c) => c.file === file);
+  for (const c of list) {
+    const line = pre.querySelector<HTMLElement>(`div[data-ln="${CSS.escape(c.line)}"]`);
+    if (!line) continue;
+    const box = document.createElement("div");
+    box.className = "cmt-saved";
+    const text = document.createElement("span");
+    text.textContent = c.text;
+    const del = document.createElement("button");
+    del.className = "icon-btn";
+    del.title = "Remove comment";
+    del.innerHTML = icon("x");
+    del.addEventListener("click", () => {
+      reviews.set(s, (reviews.get(s) ?? []).filter((x) => x !== c));
+      box.remove();
+      renderReview();
+    });
+    box.append(text, del);
+    // After the line and any comments already under it.
+    let at: Element = line;
+    while (at.nextElementSibling?.classList.contains("cmt-saved")) at = at.nextElementSibling;
+    at.after(box);
+  }
+}
+
+function renderReview() {
+  const n = changesFor ? (reviews.get(changesFor)?.length ?? 0) : 0;
+  $("#ch-review").hidden = n === 0;
+  $("#ch-review-count").textContent = `${n} comment${n === 1 ? "" : "s"} for Claude`;
+}
+
+/** The comments as one prompt: where each is, the line it's about, and what to do. */
+function reviewPrompt(list: ReviewComment[]): string {
+  const parts = list.map((c, i) => `${i + 1}. ${c.file}:${lineLabel(c.line)}\n   > ${c.code.trim()}\n   ${c.text.replace(/\n/g, "\n   ")}`);
+  return `Please address these review comments on your changes:\n\n${parts.join("\n\n")}`;
+}
+
+$("#ch-review-send").addEventListener("click", () => {
+  const s = changesFor;
+  const list = s ? reviews.get(s) : undefined;
+  if (!s || !list?.length || !s.running) return;
+  s.sendPrompt(reviewPrompt(list));
+  reviews.delete(s);
+  $("#ch-diff").querySelectorAll(".cmt-saved").forEach((x) => x.remove());
+  renderReview();
+  toast(s.el, `Sent ${list.length} comment${list.length === 1 ? "" : "s"} to Claude`);
+});
+$("#ch-review-discard").addEventListener("click", () => {
+  if (changesFor) reviews.delete(changesFor);
+  $("#ch-diff").querySelectorAll(".cmt-saved").forEach((x) => x.remove());
+  renderReview();
+});
+
+// ---------- commit, push, pull request ----------
+
+function showShipMsg(text: string, error = false) {
+  const el = $("#ch-msg");
+  el.hidden = !text;
+  el.textContent = text;
+  el.classList.toggle("error", error);
+}
+
+function renderShip() {
+  const st = changesState;
+  const s = changesFor;
+  const commit = $<HTMLButtonElement>("#ch-commit");
+  const push = $<HTMLButtonElement>("#ch-push");
+  const pr = $<HTMLButtonElement>("#ch-pr");
+  commit.disabled = shipBusy || !st?.files.length;
+  push.hidden = !st?.hasRemote || !st.ahead;
+  push.disabled = shipBusy;
+  push.textContent = st ? `Push ↑${st.ahead}` : "Push";
+  push.title = st?.upstream ? `Push ${st.ahead} commit${st.ahead === 1 ? "" : "s"} to ${st.upstream}` : "Push this branch (first push sets its upstream)";
+  pr.hidden = !st?.hasRemote;
+  pr.disabled = !s?.running;
+}
+
+async function pushNow(s: Session) {
+  shipBusy = true;
+  renderShip();
+  showShipMsg("Pushing…");
+  try {
+    await invoke<string>("git_push", { dir: dirOf(s.opts) });
+    if (changesFor === s) showShipMsg("Pushed.");
+  } catch (err) {
+    if (changesFor === s) showShipMsg(`Push failed: ${String(err) || "unknown error"}`, true);
+  } finally {
+    shipBusy = false;
+    renderShip();
+    void refreshChanges(false);
+  }
+}
+
+$("#ch-commit").addEventListener("click", () => {
+  const st = changesState;
+  if (!st?.files.length || !changesFor) return;
+  $("#cm-hint").textContent = `Commits all ${st.files.length} changed file${st.files.length === 1 ? "" : "s"}${st.branch ? ` on ${st.branch}` : ""}.`;
+  $<HTMLInputElement>("#cm-push").disabled = !st.hasRemote;
+  if (!st.hasRemote) $<HTMLInputElement>("#cm-push").checked = false;
+  const dlg = $<HTMLDialogElement>("#commit-dialog");
+  dlg.returnValue = "";
+  dlg.showModal();
+  $<HTMLTextAreaElement>("#cm-text").focus();
+});
+$<HTMLTextAreaElement>("#cm-text").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    $<HTMLFormElement>("#commit-form").requestSubmit($("#commit-form button.primary"));
+  }
+});
+$<HTMLDialogElement>("#commit-dialog").addEventListener("close", async () => {
+  const dlg = $<HTMLDialogElement>("#commit-dialog");
+  const s = changesFor;
+  const message = $<HTMLTextAreaElement>("#cm-text").value;
+  if (dlg.returnValue !== "ok" || !s || !message.trim()) return;
+  const andPush = $<HTMLInputElement>("#cm-push").checked;
+  store.set("commit", { push: andPush });
+  shipBusy = true;
+  renderShip();
+  showShipMsg("Committing…");
+  try {
+    const summary = await invoke<string>("git_commit", { dir: dirOf(s.opts), message });
+    $<HTMLTextAreaElement>("#cm-text").value = "";
+    if (changesFor === s) showShipMsg(`Committed ${summary}`);
+    shipBusy = false;
+    if (andPush) await pushNow(s);
+  } catch (err) {
+    if (changesFor === s) showShipMsg(`Commit failed: ${String(err)}`, true);
+  } finally {
+    shipBusy = false;
+    renderShip();
+    void refreshChanges(false);
+  }
+});
+$("#ch-push").addEventListener("click", () => changesFor && void pushNow(changesFor));
+$("#ch-pr").addEventListener("click", () => {
+  const s = changesFor;
+  if (!s?.running) return;
+  s.sendPrompt(
+    "Open a pull request for this branch: commit anything still outstanding, push the branch, then create the PR with a clear title and a description of what changed and why. Reply with its link.",
+  );
+  toast(s.el, "Asked Claude to open a pull request");
+});
+$<HTMLInputElement>("#cm-push").checked = store.get("commit", { push: false }).push;
 
 // Refresh while open and the window is in front: every 4 s, or at least 20x as long as
 // the last refresh took, so a very large repository doesn't keep git busy.
@@ -2228,6 +2566,255 @@ setInterval(() => {
 $("#tb-changes").addEventListener("click", () => toggleChanges());
 $("#ch-close").addEventListener("click", () => toggleChanges(false));
 $("#ch-refresh").addEventListener("click", () => void refreshChanges(false));
+
+// ---------- to-do list ----------
+// Claude's checklist (TodoWrite / TaskCreate / TaskUpdate), from the pane header's chip.
+
+const todoPop = $("#todo-pop");
+let todoPopFor: Session | null = null;
+let todoPopAnchor: HTMLElement | null = null;
+
+/** Status marks, drawn so they look the same in every font. */
+const TODO_MARK: Record<string, string> = {
+  completed: `<svg viewBox="0 0 12 12"><path d="M2.5 6.2l2.3 2.3 4.7-5" /></svg>`,
+  in_progress: `<svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.25" /><path class="fill" d="M6 1.75a4.25 4.25 0 0 1 0 8.5z" /></svg>`,
+  pending: `<svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.25" /></svg>`,
+};
+
+function renderTodoPop() {
+  const s = todoPopFor;
+  if (!s || !s.todos.length || !todoPopAnchor?.isConnected) return closeTodoPop();
+  const sum = todoSummary(s.todos)!;
+  const head = document.createElement("div");
+  head.className = "lp-head";
+  head.textContent = `To-do · ${sum.done} of ${sum.total} done`;
+  const list = document.createElement("ol");
+  list.className = "todo-list";
+  for (const t of s.todos) {
+    const li = document.createElement("li");
+    li.dataset.status = t.status;
+    const mark = document.createElement("span");
+    mark.className = "tm";
+    mark.innerHTML = TODO_MARK[t.status] ?? TODO_MARK.pending;
+    const text = document.createElement("span");
+    text.textContent = t.status === "in_progress" && t.activeForm ? t.activeForm : t.subject;
+    li.append(mark, text);
+    list.append(li);
+  }
+  todoPop.replaceChildren(head, list);
+  const r = todoPopAnchor.getBoundingClientRect();
+  todoPop.hidden = false;
+  const w = todoPop.offsetWidth;
+  todoPop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - w - 8))}px`;
+  todoPop.style.top = `${r.bottom + 6}px`;
+}
+
+function toggleTodoPop(s: Session, anchor: HTMLElement) {
+  if (todoPopFor === s && !todoPop.hidden) return closeTodoPop();
+  todoPopFor = s;
+  todoPopAnchor = anchor;
+  renderTodoPop();
+}
+
+function closeTodoPop() {
+  todoPopFor = null;
+  todoPopAnchor = null;
+  todoPop.hidden = true;
+}
+document.addEventListener("pointerdown", (e) => {
+  if (!todoPop.hidden && !todoPop.contains(e.target as Node) && !(e.target as HTMLElement).closest(".todo-chip")) closeTodoPop();
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !todoPop.hidden) closeTodoPop();
+});
+window.addEventListener("resize", closeTodoPop);
+
+// ---------- documents panel ----------
+// Plans, markdown files and artifacts the active session's conversations produced.
+
+let docsFor: Session | null = null;
+let docSelected: string | null = null;
+/** What the viewer shows (document and its file's modification time), so a refresh
+ *  that finds nothing new leaves it alone (and an artifact's preview keeps its state). */
+let docShown = "";
+let docBusy = false;
+
+const docsOpen = () => document.body.classList.contains("docs-open");
+
+function toggleDocs(force?: boolean) {
+  const open = force ?? !docsOpen();
+  if (open && changesOpen()) toggleChanges(false);
+  document.body.classList.toggle("docs-open", open);
+  $("#docs").hidden = !open;
+  $("#tb-docs").classList.toggle("on", open);
+  store.set("ui3", { docsOpen: open, docsWide: document.body.classList.contains("docs-wide") });
+  if (open) renderDocs(true);
+  requestAnimationFrame(() => sessions.forEach((s) => s.refit()));
+}
+
+function toggleDocsWide() {
+  const wide = document.body.classList.toggle("docs-wide");
+  $("#dc-wide").innerHTML = icon(wide ? "restore" : "max");
+  $("#dc-wide").title = wide ? "Narrow" : "Widen";
+  store.set("ui3", { docsOpen: docsOpen(), docsWide: wide });
+  requestAnimationFrame(() => sessions.forEach((s) => s.refit()));
+}
+
+const KIND_LABEL: Record<Doc["kind"], string> = { plan: "Plan", markdown: "Markdown", artifact: "Artifact" };
+
+/** Rebuilds the list for the active session; `reset` when the session changed. */
+function renderDocs(reset: boolean) {
+  if (!docsOpen()) return;
+  const s = active;
+  if (reset || docsFor !== s) {
+    docsFor = s;
+    docSelected = null;
+    docShown = "";
+  }
+  const list = $("#dc-list");
+  const info = $("#dc-info");
+  if (!s) {
+    list.replaceChildren();
+    info.textContent = "No session";
+    $("#dc-view").hidden = true;
+    return;
+  }
+  $("#dc-title").textContent = `Documents · ${displayName(s.opts)}`;
+  const docs = s.docs;
+  s.seeDocs();
+  info.textContent = docs.length
+    ? `${docs.length} document${docs.length === 1 ? "" : "s"} from this session`
+    : "Plans, markdown files and artifacts Claude writes in this session appear here.";
+  if (!docSelected && docs.length) docSelected = docKey(docs[0]);
+  const frag = document.createDocumentFragment();
+  for (const d of docs) {
+    const li = document.createElement("li");
+    li.className = docKey(d) === docSelected ? "on" : "";
+    li.dataset.kind = d.kind;
+    li.innerHTML = `<span class="dk"></span><span class="file"><span class="fname"></span><span class="fdir"></span></span><span class="when"></span>`;
+    li.querySelector(".dk")!.textContent = KIND_LABEL[d.kind];
+    li.querySelector(".fname")!.textContent = docName(d);
+    li.querySelector(".fdir")!.textContent = docDetail(d, dirOf(s.opts));
+    li.querySelector(".when")!.textContent = d.at && !Number.isNaN(Date.parse(d.at)) ? timeAgo(Date.parse(d.at)) : "";
+    li.title = d.path ?? d.url ?? "";
+    li.addEventListener("click", () => {
+      docSelected = docKey(d);
+      list.querySelectorAll("li").forEach((x) => x.classList.toggle("on", x === li));
+      void refreshDocView();
+    });
+    frag.appendChild(li);
+  }
+  list.replaceChildren(frag);
+  void refreshDocView();
+}
+
+/** Shows the selected document, re-reading its file (it may have changed since). */
+async function refreshDocView() {
+  const s = docsFor;
+  const view = $("#dc-view");
+  const d = s?.docs.find((x) => docKey(x) === docSelected);
+  if (!s || !d) {
+    view.hidden = true;
+    docShown = "";
+    return;
+  }
+  if (docBusy) return;
+  docBusy = true;
+  try {
+    view.hidden = false;
+    let text = d.text ?? "";
+    let modified = 0;
+    let error = "";
+    if (d.path) {
+      const r = await invoke<{ text: string; modified: number }>("read_document", { path: d.path }).catch((e) => String(e));
+      if (typeof r === "string") error = r;
+      else ({ text, modified } = r);
+    }
+    if (docsFor !== s || docKey(d) !== docSelected) return;
+    const key = `${docKey(d)}\0${modified}\0${d.text ?? ""}\0${error}`;
+    if (key === docShown) return;
+    docShown = key;
+    const body = $("#dc-body");
+    const note = $("#dc-note");
+    note.hidden = true;
+    const acts: HTMLElement[] = [];
+    const act = (label: string, run: () => void, title = "") => {
+      const b = document.createElement("button");
+      b.className = "btn small";
+      b.textContent = label;
+      b.title = title;
+      b.addEventListener("click", run);
+      acts.push(b);
+    };
+    if (d.url && isArtifactUrl(d.url)) act("Open on claude.ai", () => void openUrl(d.url!), d.url);
+    if (d.path) act("Copy path", () => void invoke("write_clipboard_text", { text: d.path }).catch(() => {}), d.path);
+    act("Copy text", () => void invoke("write_clipboard_text", { text }).catch(() => {}), "Copy the document's text");
+    $("#dc-actions").replaceChildren(...acts);
+    $("#dc-name").textContent = docName(d);
+    if (error) {
+      body.className = "dc-body dc-error";
+      body.textContent = error;
+      return;
+    }
+    if (d.kind === "artifact" && d.path) {
+      const title = pageTitle(text);
+      if (title && pageTitles.get(d.path) !== title) {
+        pageTitles.set(d.path, title);
+        $("#dc-name").textContent = docName(d);
+        renderDocsListNames(s);
+      }
+      if (needsClaudeRuntime(text)) {
+        note.hidden = false;
+        note.textContent = "Local preview: what this page saves, and who's viewing it, only works on claude.ai.";
+      }
+      const frame = document.createElement("iframe");
+      // Scripts run (artifacts are usually interactive), but in an opaque origin:
+      // no access to the app, its storage or its commands.
+      frame.setAttribute("sandbox", "allow-scripts allow-popups allow-popups-to-escape-sandbox");
+      frame.setAttribute("referrerpolicy", "no-referrer");
+      frame.title = docName(d);
+      frame.src = `${previewUrl(d.path, isWindows)}?v=${modified}`;
+      body.className = "dc-body dc-frame";
+      body.replaceChildren(frame);
+      return;
+    }
+    if (d.kind === "plan" && d.path) {
+      const title = firstHeading(text);
+      if (title && pageTitles.get(d.path) !== title) {
+        pageTitles.set(d.path, title);
+        $("#dc-name").textContent = docName(d);
+        renderDocsListNames(s);
+      }
+    }
+    const top = body.scrollTop;
+    body.className = "dc-body md";
+    body.innerHTML = renderMarkdown(text);
+    body.scrollTop = top; // an update (Claude editing the plan) keeps your place
+  } finally {
+    docBusy = false;
+  }
+}
+
+/** Relabels the list after an artifact's title was read from its page. */
+function renderDocsListNames(s: Session) {
+  const items = $("#dc-list").querySelectorAll<HTMLElement>("li");
+  s.docs.forEach((d, i) => {
+    const name = items[i]?.querySelector(".fname");
+    if (name) name.textContent = docName(d);
+  });
+}
+
+// Links in a rendered document open in the browser, never inside the app.
+$("#dc-body").addEventListener("click", (e) => {
+  const a = (e.target as HTMLElement).closest("a");
+  if (!a) return;
+  e.preventDefault();
+  const href = a.getAttribute("href") ?? "";
+  if (/^https?:\/\//i.test(href)) void openUrl(href);
+});
+$("#tb-docs").addEventListener("click", () => toggleDocs());
+$("#dc-close").addEventListener("click", () => toggleDocs(false));
+$("#dc-wide").addEventListener("click", toggleDocsWide);
 
 // ---------- broadcast ----------
 
@@ -2479,6 +3066,7 @@ function paletteCommands(): PaletteItem[] {
   add("Open conversation from history…", () => void openHistory(), `${mod}O`);
   add("Broadcast a prompt to sessions…", openBroadcast, `${mod}J`, sessions.some((s) => s.running));
   add(changesOpen() ? "Hide changes panel" : "Show changes panel", () => toggleChanges(), `${mod}G`, !!active);
+  add(docsOpen() ? "Hide documents panel" : "Show documents panel", () => toggleDocs(), `${mod}D`, !!active);
   add("Search terminal", openSearch, `${mod}F`, !!active);
   if (active) {
     const a = active;
@@ -2709,7 +3297,9 @@ $("#tb-search").title = `Search terminal (${isMac ? "⌘F" : "Ctrl+Shift+F"})`;
   $("#tb-broadcast").addEventListener("click", openBroadcast);
   $("#tb-broadcast").title = `Broadcast a prompt to sessions (${mod}J)`;
   $("#tb-changes").title = `Changes (${mod}G)`;
+  $("#tb-docs").title = `Documents: plans and artifacts (${mod}D)`;
   $("#bc-kbd").textContent = isMac ? "⌘↵" : "Ctrl+↵";
+  $("#cm-kbd").textContent = isMac ? "⌘↵" : "Ctrl+↵";
 }
 if (isMac) document.body.classList.add("mac");
 
@@ -2777,6 +3367,11 @@ applyTheme();
 showEmpty();
 applyLayout();
 if (store.get("ui2", { changesOpen: false }).changesOpen) toggleChanges(true);
+{
+  const ui3 = store.get("ui3", { docsOpen: false, docsWide: false });
+  if (ui3.docsWide) toggleDocsWide();
+  if (ui3.docsOpen) toggleDocs(true);
+}
 // Restored terminals must measure the real font, so wait for it first.
 void fontsReady.then(restoreWorkspace);
 void checkCli();
