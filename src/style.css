@@ -1060,6 +1060,89 @@ body.changes-open #terminals { margin-right: 400px; }
 .ch-diff .meta { color: var(--text-3); }
 #tb-changes.on { color: var(--accent); background: var(--accent-soft); }
 
+/* ---------- documents panel ---------- */
+/* Reuses the changes panel's frame; reading a plan wants more room, so it can widen. */
+
+body.docs-open { --docs-w: 460px; }
+body.docs-open.docs-wide { --docs-w: min(880px, 62vw); }
+body.docs-open #terminals { margin-right: var(--docs-w); }
+.changes.docs { width: var(--docs-w, 460px); }
+#tb-docs.on { color: var(--accent); background: var(--accent-soft); }
+#tb-docs.news:not(.on)::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+#tb-docs { position: relative; }
+
+.dc-list { max-height: 32%; }
+.dc-list:has(~ .dc-view[hidden]) { max-height: none; flex: 1; }
+.dc-list li { align-items: flex-start; }
+.dc-list .dk {
+  flex: none;
+  width: 62px;
+  margin-top: 1px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.dc-list li[data-kind="plan"] .dk { color: var(--accent); }
+.dc-list li[data-kind="artifact"] .dk { color: var(--st-working); }
+.dc-list .file { flex-direction: column; align-items: stretch; gap: 1px; }
+.dc-list .fname { overflow: hidden; text-overflow: ellipsis; }
+.dc-list .fdir { direction: ltr; font-family: var(--sans); font-size: 11px; }
+.dc-list .when { flex: none; font-size: 11px; color: var(--text-3); margin-top: 1px; }
+
+.dc-view { flex: 1; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--hairline-strong); }
+.dc-view[hidden] { display: none; }
+.dc-bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; flex: none; border-bottom: 1px solid var(--hairline); }
+.dc-name { flex: 1; min-width: 0; font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dc-actions { display: flex; gap: 4px; flex: none; }
+.btn.small { height: 24px; padding: 0 8px; font-size: 11.5px; }
+.dc-note { padding: 7px 14px; font-size: 11.5px; color: var(--warn-text); background: var(--accent-faint); border-bottom: 1px solid var(--hairline); flex: none; }
+.dc-note[hidden] { display: none; }
+.dc-body { flex: 1; min-height: 0; overflow: auto; background: var(--bg); user-select: text; -webkit-user-select: text; }
+.dc-body.dc-error { padding: 16px; color: var(--text-3); font-size: 12.5px; }
+.dc-body.dc-frame { overflow: hidden; background: #fff; }
+.dc-body.dc-frame iframe { width: 100%; height: 100%; border: 0; display: block; }
+
+/* Rendered markdown: a calm reading column. */
+.md { padding: 16px 20px 28px; font-size: 13.5px; line-height: 1.6; color: var(--text); overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md h1, .md h2, .md h3, .md h4 { line-height: 1.3; margin: 1.4em 0 .5em; font-weight: 650; }
+.md h1 { font-size: 1.45em; }
+.md h2 { font-size: 1.22em; padding-bottom: .25em; border-bottom: 1px solid var(--hairline); }
+.md h3 { font-size: 1.06em; }
+.md h4 { font-size: 1em; color: var(--text-2); }
+.md p, .md ul, .md ol, .md pre, .md table, .md blockquote { margin: 0 0 .85em; }
+.md ul, .md ol { padding-left: 1.4em; }
+.md li { margin: .2em 0; }
+.md li > input[type="checkbox"] { margin: 0 .4em 0 -1.2em; }
+.md a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.md code { font-family: var(--mono); font-size: .88em; background: var(--surface-3); padding: .1em .35em; border-radius: 4px; }
+.md pre { background: var(--surface); border: 1px solid var(--hairline); border-radius: 6px; padding: 10px 12px; overflow-x: auto; }
+.md pre code { background: none; padding: 0; font-size: 12px; line-height: 1.5; }
+.md blockquote { padding: 0 0 0 12px; border-left: 3px solid var(--accent-border); color: var(--text-2); }
+.md hr { border: 0; border-top: 1px solid var(--hairline-strong); margin: 1.4em 0; }
+.md table { border-collapse: collapse; display: block; overflow-x: auto; font-size: .93em; }
+.md th, .md td { border: 1px solid var(--hairline-strong); padding: 5px 9px; text-align: left; vertical-align: top; }
+.md th { background: var(--surface); font-weight: 600; }
+.md img { max-width: 100%; }
+
+/* Sidebar: a new document in a session you're not reading. */
+.doc-badge { display: inline-flex; color: var(--accent); flex: none; }
+.doc-badge[hidden] { display: none; }
+.doc-badge .ic { width: 13px; height: 13px; }
+body.sidebar-collapsed .doc-badge { position: absolute; top: 4px; right: 4px; }
+body.sidebar-collapsed .doc-badge .ic { width: 10px; height: 10px; }
+
 /* ---------- broadcast ---------- */
 
 dialog textarea {

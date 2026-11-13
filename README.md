@@ -17,6 +17,10 @@ The app adds a window around it:
   `--worktree`), so parallel sessions on one repository don't edit the same files.
 - **Changes panel** – the files the active session has changed, with +/− counts and a diff view
   (⌘G / Ctrl+Shift+G).
+- **Documents panel** – the plans, markdown files and claude.ai artifacts the session's conversation
+  produced, newest first: plans and markdown rendered (and kept current while Claude edits them),
+  artifacts previewed in a sandboxed frame with a link to claude.ai. A session that writes a new one
+  gets a badge (⌘D / Ctrl+Shift+D).
 - **Broadcast** – send one prompt to several sessions at once (⌘J / Ctrl+Shift+J).
 - **Command palette** – ⌘K / Ctrl+Shift+K to jump to a session or run any command. Rename sessions and
   give them a colour (double-click or right-click a tab); drag tabs to reorder them.
@@ -132,6 +136,7 @@ The builds aren't code-signed, so the first launch shows a warning:
 | Collapse / expand sidebar | ⌘B | Ctrl+Shift+B |
 | Command palette | ⌘K | Ctrl+Shift+K |
 | Changes panel | ⌘G | Ctrl+Shift+G |
+| Documents panel | ⌘D | Ctrl+Shift+D |
 | Broadcast a prompt | ⌘J | Ctrl+Shift+J |
 | Conversation history | ⌘O | Ctrl+Shift+O |
 | Maximise / restore pane | ⌘↵ | Ctrl+Shift+↵ |
@@ -161,6 +166,7 @@ src/style.css
 src-tauri/src/pty.rs   PTY spawn / write / resize / kill, flow control, `claude --version`
 src-tauri/src/extras.rs  conversations (per folder and across projects), git branch, clipboard images
 src-tauri/src/git.rs     worktree paths, changed files and diffs for the changes panel
+src-tauri/src/docs.rs    plans, markdown files and artifacts a conversation produced; artifact previews
 scripts/                 release version and latest.json (used by the Release workflow)
 src/themes.ts          terminal colours for dark and light
 src-tauri/src/lib.rs   Tauri setup

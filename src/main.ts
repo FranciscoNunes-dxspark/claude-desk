@@ -18,6 +18,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
 
+import { type Doc, docDetail, docKey, docName, firstHeading, isArtifactUrl, needsClaudeRuntime, pageTitle, pageTitles, previewUrl, renderMarkdown } from "./docs";
 import { SEARCH_DECORATIONS, TERMINAL_THEMES, type ThemeName } from "./themes";
 
 // ---------- persisted settings ----------
@@ -369,6 +370,11 @@ class Session {
   usage: Usage | null = null;
   /** Claude Code's own live status (its status line input, see `pty_status`). */
   status: ClaudeStatus | null = null;
+  /** Documents each of this session's conversations produced (see `conversation_documents`).
+   *  Kept across /clear, which is how plan mode often goes on to carry out a plan. */
+  private docsByConv = new Map<string, Doc[]>();
+  /** How many writes of each document the user has seen in the panel. */
+  private docsSeen = new Map<string, number>();
   /** Claude Code's own status reports (OSC 7501), per id ("" is the main thread). */
   private program = new Map<string, ProgramEntry>();
   /** Set once Claude Code has reported status; the output heuristic is then off. */
@@ -520,6 +526,7 @@ class Session {
       <span class="meta"><span class="name"></span><span class="path"></span><span class="status-line" hidden></span></span>
       <kbd></kbd>
       <button class="icon-btn close" title="Close session">${icon("x")}</button>
+      <span class="doc-badge" hidden title="New document: open the documents panel">${icon("doc")}</span>
       <span class="ctx-line" hidden><i></i></span>`;
     this.tab.querySelector(".path")!.textContent = `\u200E${dirOf(opts)}\u200E`;
     this.tab.addEventListener("click", () => {
@@ -620,7 +627,7 @@ class Session {
       this.flagAttention("finished", shown?.title);
     }
     if (prev !== next && changesOpen() && this === active) scheduleChangesRefresh(300);
-    if (prev !== next) void this.refreshStatus().then(() => this.refreshUsage());
+    if (prev !== next) void this.refreshStatus().then(() => this.refreshUsage()).then(() => this.refreshDocs());
   }
 
   get running() {
@@ -643,6 +650,44 @@ class Session {
       saveWorkspace();
     }
     this.showUsage();
+  }
+
+  /** The documents of all this session's conversations, newest first. */
+  get docs(): Doc[] {
+    const all = new Map<string, Doc>();
+    for (const list of this.docsByConv.values())
+      for (const d of list) {
+        const prev = all.get(docKey(d));
+        if (!prev || (d.at ?? "") >= (prev.at ?? "")) all.set(docKey(d), prev ? { ...d, writes: d.writes + prev.writes } : d);
+      }
+    return [...all.values()].sort((a, b) => (b.at ?? "").localeCompare(a.at ?? ""));
+  }
+
+  /** Reads what the conversation produced; badges the tab when there's something new. */
+  async refreshDocs() {
+    const id = this.opts.conversationId;
+    if (!id) return;
+    const list = await invoke<Doc[]>("conversation_documents", { cwd: dirOf(this.opts), id }).catch(() => null);
+    if (!list || id !== this.opts.conversationId) return;
+    const first = !this.docsByConv.has(id);
+    if (!first && JSON.stringify(list) === JSON.stringify(this.docsByConv.get(id))) return;
+    this.docsByConv.set(id, list);
+    // What a conversation already had when the app first read it isn't news.
+    if (first) for (const d of list) this.docsSeen.set(docKey(d), Math.max(this.docsSeen.get(docKey(d)) ?? 0, d.writes));
+    if (docsOpen() && docsFor === this) renderDocs(false);
+    this.showDocBadge();
+  }
+
+  /** Marks every document as seen (the panel shows them). */
+  seeDocs() {
+    for (const d of this.docs) this.docsSeen.set(docKey(d), d.writes);
+    this.showDocBadge();
+  }
+
+  showDocBadge() {
+    const news = this.docs.some((d) => d.writes > (this.docsSeen.get(docKey(d)) ?? 0));
+    this.tab.querySelector<HTMLElement>(".doc-badge")!.hidden = !news;
+    if (this === active) $("#tb-docs").classList.toggle("news", news);
   }
 
   /** Reads the conversation's token usage and shows it if it changed. */
@@ -1177,6 +1222,8 @@ function activate(s: Session, focus = true) {
   saveWorkspace();
   if (prev !== s && !searchBar.hidden) moveSearchTo(s, prev);
   if (prev !== s && changesOpen()) scheduleChangesRefresh();
+  if (prev !== s && docsOpen()) renderDocs(true);
+  s.showDocBadge();
   updateTopbar();
   if (!focus) return;
   requestAnimationFrame(() => {
@@ -1544,7 +1591,8 @@ setInterval(renderLimits, 60_000); // drop a window once it has reset
 // conversation since the last read.
 setInterval(() => {
   if (document.hidden) return;
-  for (const s of sessions) if (s.running) void s.refreshStatus().then(() => s.refreshUsage());
+  for (const s of sessions) if (s.running) void s.refreshStatus().then(() => s.refreshUsage()).then(() => s.refreshDocs());
+  if (docsOpen() && windowFocused) void refreshDocView();
 }, 2000);
 
 // ---------- git branch ----------
@@ -2050,7 +2098,7 @@ async function checkCli() {
 
 function isAppShortcut(e: KeyboardEvent): boolean {
   const mod = isMac ? e.metaKey : e.ctrlKey && e.shiftKey;
-  if (mod && ["KeyT", "KeyW", "Comma", "Backslash", "KeyF", "Enter", "KeyB", "KeyK", "KeyG", "KeyJ", "KeyO"].includes(e.code))
+  if (mod && ["KeyT", "KeyW", "Comma", "Backslash", "KeyF", "Enter", "KeyB", "KeyK", "KeyG", "KeyD", "KeyJ", "KeyO"].includes(e.code))
     return true;
   if (e.ctrlKey && e.key === "Tab") return true;
   if (mod && /^Digit[1-9]$/.test(e.code)) return true;
@@ -2067,6 +2115,7 @@ window.addEventListener("keydown", (e) => {
   else if (e.code === "KeyB") toggleSidebar();
   else if (e.code === "KeyK") openPalette();
   else if (e.code === "KeyG" && active) toggleChanges();
+  else if (e.code === "KeyD" && active) toggleDocs();
   else if (e.code === "KeyJ") openBroadcast();
   else if (e.code === "KeyO") void openHistory();
   else if (e.code === "Enter" && active) toggleZoom(active);
@@ -2106,6 +2155,7 @@ const changesOpen = () => document.body.classList.contains("changes-open");
 
 function toggleChanges(force?: boolean) {
   const open = force ?? !changesOpen();
+  if (open && docsOpen()) toggleDocs(false);
   document.body.classList.toggle("changes-open", open);
   $("#changes").hidden = !open;
   $("#tb-changes").classList.toggle("on", open);
@@ -2228,6 +2278,193 @@ setInterval(() => {
 $("#tb-changes").addEventListener("click", () => toggleChanges());
 $("#ch-close").addEventListener("click", () => toggleChanges(false));
 $("#ch-refresh").addEventListener("click", () => void refreshChanges(false));
+
+// ---------- documents panel ----------
+// Plans, markdown files and artifacts the active session's conversations produced.
+
+let docsFor: Session | null = null;
+let docSelected: string | null = null;
+/** What the viewer shows (document and its file's modification time), so a refresh
+ *  that finds nothing new leaves it alone (and an artifact's preview keeps its state). */
+let docShown = "";
+let docBusy = false;
+
+const docsOpen = () => document.body.classList.contains("docs-open");
+
+function toggleDocs(force?: boolean) {
+  const open = force ?? !docsOpen();
+  if (open && changesOpen()) toggleChanges(false);
+  document.body.classList.toggle("docs-open", open);
+  $("#docs").hidden = !open;
+  $("#tb-docs").classList.toggle("on", open);
+  store.set("ui3", { docsOpen: open, docsWide: document.body.classList.contains("docs-wide") });
+  if (open) renderDocs(true);
+  requestAnimationFrame(() => sessions.forEach((s) => s.refit()));
+}
+
+function toggleDocsWide() {
+  const wide = document.body.classList.toggle("docs-wide");
+  $("#dc-wide").innerHTML = icon(wide ? "restore" : "max");
+  $("#dc-wide").title = wide ? "Narrow" : "Widen";
+  store.set("ui3", { docsOpen: docsOpen(), docsWide: wide });
+  requestAnimationFrame(() => sessions.forEach((s) => s.refit()));
+}
+
+const KIND_LABEL: Record<Doc["kind"], string> = { plan: "Plan", markdown: "Markdown", artifact: "Artifact" };
+
+/** Rebuilds the list for the active session; `reset` when the session changed. */
+function renderDocs(reset: boolean) {
+  if (!docsOpen()) return;
+  const s = active;
+  if (reset || docsFor !== s) {
+    docsFor = s;
+    docSelected = null;
+    docShown = "";
+  }
+  const list = $("#dc-list");
+  const info = $("#dc-info");
+  if (!s) {
+    list.replaceChildren();
+    info.textContent = "No session";
+    $("#dc-view").hidden = true;
+    return;
+  }
+  $("#dc-title").textContent = `Documents · ${displayName(s.opts)}`;
+  const docs = s.docs;
+  s.seeDocs();
+  info.textContent = docs.length
+    ? `${docs.length} document${docs.length === 1 ? "" : "s"} from this session`
+    : "Plans, markdown files and artifacts Claude writes in this session appear here.";
+  if (!docSelected && docs.length) docSelected = docKey(docs[0]);
+  const frag = document.createDocumentFragment();
+  for (const d of docs) {
+    const li = document.createElement("li");
+    li.className = docKey(d) === docSelected ? "on" : "";
+    li.dataset.kind = d.kind;
+    li.innerHTML = `<span class="dk"></span><span class="file"><span class="fname"></span><span class="fdir"></span></span><span class="when"></span>`;
+    li.querySelector(".dk")!.textContent = KIND_LABEL[d.kind];
+    li.querySelector(".fname")!.textContent = docName(d);
+    li.querySelector(".fdir")!.textContent = docDetail(d, dirOf(s.opts));
+    li.querySelector(".when")!.textContent = d.at && !Number.isNaN(Date.parse(d.at)) ? timeAgo(Date.parse(d.at)) : "";
+    li.title = d.path ?? d.url ?? "";
+    li.addEventListener("click", () => {
+      docSelected = docKey(d);
+      list.querySelectorAll("li").forEach((x) => x.classList.toggle("on", x === li));
+      void refreshDocView();
+    });
+    frag.appendChild(li);
+  }
+  list.replaceChildren(frag);
+  void refreshDocView();
+}
+
+/** Shows the selected document, re-reading its file (it may have changed since). */
+async function refreshDocView() {
+  const s = docsFor;
+  const view = $("#dc-view");
+  const d = s?.docs.find((x) => docKey(x) === docSelected);
+  if (!s || !d) {
+    view.hidden = true;
+    docShown = "";
+    return;
+  }
+  if (docBusy) return;
+  docBusy = true;
+  try {
+    view.hidden = false;
+    let text = d.text ?? "";
+    let modified = 0;
+    let error = "";
+    if (d.path) {
+      const r = await invoke<{ text: string; modified: number }>("read_document", { path: d.path }).catch((e) => String(e));
+      if (typeof r === "string") error = r;
+      else ({ text, modified } = r);
+    }
+    if (docsFor !== s || docKey(d) !== docSelected) return;
+    const key = `${docKey(d)}\0${modified}\0${d.text ?? ""}\0${error}`;
+    if (key === docShown) return;
+    docShown = key;
+    const body = $("#dc-body");
+    const note = $("#dc-note");
+    note.hidden = true;
+    const acts: HTMLElement[] = [];
+    const act = (label: string, run: () => void, title = "") => {
+      const b = document.createElement("button");
+      b.className = "btn small";
+      b.textContent = label;
+      b.title = title;
+      b.addEventListener("click", run);
+      acts.push(b);
+    };
+    if (d.url && isArtifactUrl(d.url)) act("Open on claude.ai", () => void openUrl(d.url!), d.url);
+    if (d.path) act("Copy path", () => void invoke("write_clipboard_text", { text: d.path }).catch(() => {}), d.path);
+    act("Copy text", () => void invoke("write_clipboard_text", { text }).catch(() => {}), "Copy the document's text");
+    $("#dc-actions").replaceChildren(...acts);
+    $("#dc-name").textContent = docName(d);
+    if (error) {
+      body.className = "dc-body dc-error";
+      body.textContent = error;
+      return;
+    }
+    if (d.kind === "artifact" && d.path) {
+      const title = pageTitle(text);
+      if (title && pageTitles.get(d.path) !== title) {
+        pageTitles.set(d.path, title);
+        $("#dc-name").textContent = docName(d);
+        renderDocsListNames(s);
+      }
+      if (needsClaudeRuntime(text)) {
+        note.hidden = false;
+        note.textContent = "Local preview: what this page saves, and who's viewing it, only works on claude.ai.";
+      }
+      const frame = document.createElement("iframe");
+      // Scripts run (artifacts are usually interactive), but in an opaque origin:
+      // no access to the app, its storage or its commands.
+      frame.setAttribute("sandbox", "allow-scripts allow-popups allow-popups-to-escape-sandbox");
+      frame.setAttribute("referrerpolicy", "no-referrer");
+      frame.title = docName(d);
+      frame.src = `${previewUrl(d.path, isWindows)}?v=${modified}`;
+      body.className = "dc-body dc-frame";
+      body.replaceChildren(frame);
+      return;
+    }
+    if (d.kind === "plan" && d.path) {
+      const title = firstHeading(text);
+      if (title && pageTitles.get(d.path) !== title) {
+        pageTitles.set(d.path, title);
+        $("#dc-name").textContent = docName(d);
+        renderDocsListNames(s);
+      }
+    }
+    const top = body.scrollTop;
+    body.className = "dc-body md";
+    body.innerHTML = renderMarkdown(text);
+    body.scrollTop = top; // an update (Claude editing the plan) keeps your place
+  } finally {
+    docBusy = false;
+  }
+}
+
+/** Relabels the list after an artifact's title was read from its page. */
+function renderDocsListNames(s: Session) {
+  const items = $("#dc-list").querySelectorAll<HTMLElement>("li");
+  s.docs.forEach((d, i) => {
+    const name = items[i]?.querySelector(".fname");
+    if (name) name.textContent = docName(d);
+  });
+}
+
+// Links in a rendered document open in the browser, never inside the app.
+$("#dc-body").addEventListener("click", (e) => {
+  const a = (e.target as HTMLElement).closest("a");
+  if (!a) return;
+  e.preventDefault();
+  const href = a.getAttribute("href") ?? "";
+  if (/^https?:\/\//i.test(href)) void openUrl(href);
+});
+$("#tb-docs").addEventListener("click", () => toggleDocs());
+$("#dc-close").addEventListener("click", () => toggleDocs(false));
+$("#dc-wide").addEventListener("click", toggleDocsWide);
 
 // ---------- broadcast ----------
 
@@ -2479,6 +2716,7 @@ function paletteCommands(): PaletteItem[] {
   add("Open conversation from history…", () => void openHistory(), `${mod}O`);
   add("Broadcast a prompt to sessions…", openBroadcast, `${mod}J`, sessions.some((s) => s.running));
   add(changesOpen() ? "Hide changes panel" : "Show changes panel", () => toggleChanges(), `${mod}G`, !!active);
+  add(docsOpen() ? "Hide documents panel" : "Show documents panel", () => toggleDocs(), `${mod}D`, !!active);
   add("Search terminal", openSearch, `${mod}F`, !!active);
   if (active) {
     const a = active;
@@ -2709,6 +2947,7 @@ $("#tb-search").title = `Search terminal (${isMac ? "⌘F" : "Ctrl+Shift+F"})`;
   $("#tb-broadcast").addEventListener("click", openBroadcast);
   $("#tb-broadcast").title = `Broadcast a prompt to sessions (${mod}J)`;
   $("#tb-changes").title = `Changes (${mod}G)`;
+  $("#tb-docs").title = `Documents: plans and artifacts (${mod}D)`;
   $("#bc-kbd").textContent = isMac ? "⌘↵" : "Ctrl+↵";
 }
 if (isMac) document.body.classList.add("mac");
@@ -2777,6 +3016,11 @@ applyTheme();
 showEmpty();
 applyLayout();
 if (store.get("ui2", { changesOpen: false }).changesOpen) toggleChanges(true);
+{
+  const ui3 = store.get("ui3", { docsOpen: false, docsWide: false });
+  if (ui3.docsWide) toggleDocsWide();
+  if (ui3.docsOpen) toggleDocs(true);
+}
 // Restored terminals must measure the real font, so wait for it first.
 void fontsReady.then(restoreWorkspace);
 void checkCli();

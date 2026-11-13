@@ -44,6 +44,12 @@ function fakeBackend() {
       if (cmd === "pty_write" && window.__opt.writeFails) throw "session not found";
       if (cmd === "plugin:dialog|message") return window.__opt.dialogAnswer;
       if (cmd === "claude_version") return "2.0.0 (Claude Code)";
+      if (cmd === "conversation_documents") return window.__docs?.[args.id] ?? [];
+      if (cmd === "read_document") {
+        const text = window.__docText?.[args.path];
+        if (text == null) throw "The file no longer exists.";
+        return { text, modified: text.length };
+      }
       return null;
     },
   };
@@ -209,6 +215,40 @@ const scenarios = {
     await p.waitForTimeout(400);
     const n = await tabs(p);
     return [n === 1, `${n} sessions left of 3 after two closes`];
+  }],
+  "the documents panel shows a session's plan, safely": [2, async (p) => {
+    await p.evaluate(() => {
+      const doc = (kind, path, at, extra = {}) => ({ kind, path, url: null, title: null, description: null, text: null, at, writes: 1, ...extra });
+      window.__docText = { "/w/a/NOTES.md": "# Notes\n\n- one <img src=x onerror=\"window.__xss=1\">" };
+      window.__docs = { a: [
+        doc("plan", null, "2026-11-13T10:05:00Z", { text: "# The plan\n\n1. Read the code\n2. Fix it" }),
+        doc("markdown", "/w/a/NOTES.md", "2026-11-13T10:00:00Z"),
+      ] };
+    });
+    await p.waitForTimeout(2300); // one poll
+    await p.click("#tb-docs");
+    await p.waitForTimeout(300);
+    const plan = await p.evaluate(() => ({ items: document.querySelectorAll("#dc-list li").length, h1: document.querySelector("#dc-body h1")?.textContent }));
+    await p.click("#dc-list li:nth-child(2)");
+    await p.waitForTimeout(300);
+    const notes = await p.evaluate(() => ({ li: document.querySelector("#dc-body li")?.textContent.trim(), xss: window.__xss ?? 0 }));
+    const ok = plan.items === 2 && plan.h1 === "The plan" && notes.li === "one" && notes.xss === 0;
+    return [ok, `${plan.items} listed, plan "${plan.h1}", notes "${notes.li}", script ran: ${notes.xss}`];
+  }],
+  "a new document in another session badges its tab": [2, async (p) => {
+    await p.click("#tb-docs");
+    await p.evaluate(() => { window.__docs = { b: [] }; });
+    await p.waitForTimeout(2300); // b's conversation read once: nothing new yet
+    const before = await p.evaluate(() => !document.querySelector("#tabs li:nth-child(2) .doc-badge").hidden);
+    await p.evaluate(() => {
+      window.__docs.b = [{ kind: "plan", path: null, url: null, title: null, description: null, text: "# B", at: "2026-11-13T11:00:00Z", writes: 1 }];
+    });
+    await p.waitForTimeout(2300);
+    const after = await p.evaluate(() => !document.querySelector("#tabs li:nth-child(2) .doc-badge").hidden);
+    await p.click("#tabs li:nth-child(2)");
+    await p.waitForTimeout(300);
+    const seen = await p.evaluate(() => document.querySelector("#tabs li:nth-child(2) .doc-badge").hidden && document.querySelector("#dc-body h1")?.textContent === "B");
+    return [!before && after && seen, `before ${before}, after ${after}, cleared and shown ${seen}`];
   }],
 };
 
