@@ -18,7 +18,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
 
-import { type Doc, docDetail, docKey, docName, firstHeading, isArtifactUrl, needsClaudeRuntime, pageTitle, pageTitles, previewUrl, renderMarkdown } from "./docs";
+import { type Doc, type Todo, todoSummary, docDetail, docKey, docName, firstHeading, isArtifactUrl, needsClaudeRuntime, pageTitle, pageTitles, previewUrl, renderMarkdown } from "./docs";
 import { SEARCH_DECORATIONS, TERMINAL_THEMES, type ThemeName } from "./themes";
 
 // ---------- persisted settings ----------
@@ -375,6 +375,8 @@ class Session {
   private docsByConv = new Map<string, Doc[]>();
   /** How many writes of each document the user has seen in the panel. */
   private docsSeen = new Map<string, number>();
+  /** Claude's to-do list in the current conversation. */
+  todos: Todo[] = [];
   /** Claude Code's own status reports (OSC 7501), per id ("" is the main thread). */
   private program = new Map<string, ProgramEntry>();
   /** Set once Claude Code has reported status; the output heuristic is then off. */
@@ -405,6 +407,7 @@ class Session {
         <span class="pane-path"></span>
         <span class="branch" hidden></span>
         <span class="state-label" hidden></span>
+        <button class="todo-chip" hidden></button>
         <span class="usage" hidden></span>
         <span class="chips-row"></span>
         <button class="icon-btn" data-act="zoom" title="Maximise">${icon("max")}</button>
@@ -414,6 +417,10 @@ class Session {
       <div class="term-body"><div class="term-host"></div></div>`;
     this.el.querySelector(".pane-path")!.textContent = dirOf(opts);
     this.el.querySelector(".chips-row")!.append(...chipsFor(opts));
+    this.el.querySelector(".todo-chip")!.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleTodoPop(this, e.currentTarget as HTMLElement);
+    });
     this.el.querySelector('[data-act="zoom"]')!.addEventListener("click", () => toggleZoom(this));
     this.el.querySelector('[data-act="restart"]')!.addEventListener("click", () => this.restart());
     this.el.querySelector('[data-act="close"]')!.addEventListener("click", () => closeSession(this));
@@ -524,6 +531,7 @@ class Session {
       <span class="dot"></span>
       <span class="initial"></span>
       <span class="meta"><span class="name"></span><span class="path"></span><span class="status-line" hidden></span></span>
+      <span class="todo-count" hidden></span>
       <kbd></kbd>
       <button class="icon-btn close" title="Close session">${icon("x")}</button>
       <span class="doc-badge" hidden title="New document: open the documents panel">${icon("doc")}</span>
@@ -667,8 +675,13 @@ class Session {
   async refreshDocs() {
     const id = this.opts.conversationId;
     if (!id) return;
-    const list = await invoke<Doc[]>("conversation_documents", { cwd: dirOf(this.opts), id }).catch(() => null);
-    if (!list || id !== this.opts.conversationId) return;
+    const act = await invoke<{ docs: Doc[]; todos: Todo[] }>("conversation_activity", { cwd: dirOf(this.opts), id }).catch(() => null);
+    if (!act || id !== this.opts.conversationId) return;
+    if (JSON.stringify(act.todos) !== JSON.stringify(this.todos)) {
+      this.todos = act.todos;
+      this.showTodos();
+    }
+    const list = act.docs;
     const first = !this.docsByConv.has(id);
     if (!first && JSON.stringify(list) === JSON.stringify(this.docsByConv.get(id))) return;
     this.docsByConv.set(id, list);
@@ -676,6 +689,26 @@ class Session {
     if (first) for (const d of list) this.docsSeen.set(docKey(d), Math.max(this.docsSeen.get(docKey(d)) ?? 0, d.writes));
     if (docsOpen() && docsFor === this) renderDocs(false);
     this.showDocBadge();
+  }
+
+  /** The to-do progress on the tab and the pane header. */
+  showTodos() {
+    const sum = todoSummary(this.todos);
+    const count = this.tab.querySelector<HTMLElement>(".todo-count")!;
+    const chip = this.el.querySelector<HTMLButtonElement>(".todo-chip")!;
+    count.hidden = chip.hidden = !sum;
+    if (sum) {
+      const all = sum.done === sum.total;
+      count.textContent = `${sum.done}/${sum.total}`;
+      count.title = all ? "To-do list done" : `To-do list: ${sum.done} of ${sum.total} done${sum.now ? `. Now: ${sum.now}` : ""}`;
+      count.classList.toggle("all", all);
+      chip.classList.toggle("all", all);
+      chip.innerHTML = `${icon("todo")}<b></b><span></span>`;
+      chip.querySelector("b")!.textContent = `${sum.done}/${sum.total}`;
+      chip.querySelector("span")!.textContent = sum.now ?? (all ? "All done" : "To do");
+      chip.title = "Show Claude's to-do list";
+    }
+    if (todoPopFor === this) renderTodoPop();
   }
 
   /** Marks every document as seen (the panel shows them). */
@@ -2139,6 +2172,29 @@ interface GitChange {
   binary: boolean;
 }
 
+interface GitChanges {
+  branch: string | null;
+  files: GitChange[];
+  upstream: string | null;
+  ahead: number;
+  hasRemote: boolean;
+}
+
+/** A comment on one line of a diff, waiting to be sent to the session. */
+interface ReviewComment {
+  file: string;
+  /** "42" for the new file's line 42, "-17" for the old file's (a removed line). */
+  line: string;
+  code: string;
+  text: string;
+}
+
+/** Review comments per session, until they're sent or discarded. */
+const reviews = new WeakMap<Session, ReviewComment[]>();
+/** The last `git_changes` result shown, for the commit and push buttons. */
+let changesState: GitChanges | null = null;
+let shipBusy = false;
+
 let changesFor: Session | null = null;
 let changesSelected: string | null = null;
 /** What the list and diff currently show, so unchanged refreshes skip rebuilding the DOM
@@ -2186,16 +2242,22 @@ async function refreshChanges(reset: boolean) {
     changesSelected = null;
     changesShown = "";
     diffShown = "";
+    changesState = null;
+    renderShip();
+    renderReview();
+    showShipMsg("");
     $("#ch-diff").textContent = "";
     $("#ch-diff").hidden = true;
   }
   changesBusy = true;
   const t0 = performance.now();
   try {
-    const res = await invoke<{ branch: string | null; files: GitChange[] }>("git_changes", { dir: dirOf(s.opts) });
+    const res = await invoke<GitChanges>("git_changes", { dir: dirOf(s.opts) });
     changesCostMs = performance.now() - t0;
     changesLast = performance.now();
     if (changesFor !== s) return;
+    changesState = res;
+    renderShip();
     $("#ch-title").textContent = `Changes · ${displayName(s.opts)}`;
     info.textContent = res.files.length
       ? `${res.files.length} file${res.files.length === 1 ? "" : "s"} changed${res.branch ? ` on ${res.branch}` : ""}`
@@ -2242,6 +2304,8 @@ async function refreshChanges(reset: boolean) {
       changesShown = "";
       const msg = String(err);
       info.textContent = /not a git repository/i.test(msg) ? "This folder isn't a git repository." : msg;
+      changesState = null;
+      renderShip();
     }
   } finally {
     changesBusy = false;
@@ -2259,15 +2323,239 @@ async function showDiff(s: Session, f: GitChange) {
   if (key === diffShown) return; // unchanged since the last refresh
   diffShown = key;
   const frag = document.createDocumentFragment();
+  // Line numbers, from each hunk's header, so a comment can say where it is.
+  let oldNo = 0;
+  let newNo = 0;
+  let inHunk = false;
   for (const line of text.split("\n")) {
     const div = document.createElement("div");
-    div.className =
-      line.startsWith("@@") ? "hunk" : line.startsWith("+++") || line.startsWith("---") ? "meta" : line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : line.startsWith("diff ") || line.startsWith("index ") ? "meta" : "";
+    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line);
+    if (hunk) {
+      [oldNo, newNo, inHunk] = [Number(hunk[1]), Number(hunk[2]), true];
+      div.className = "hunk";
+    } else if (!inHunk || line.startsWith("diff ") || line.startsWith("\\")) {
+      div.className = line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("+++") || line.startsWith("---") ? "meta" : "";
+      if (line.startsWith("diff ")) inHunk = false;
+    } else if (line.startsWith("+")) {
+      div.className = "add";
+      div.dataset.ln = String(newNo++);
+    } else if (line.startsWith("-")) {
+      div.className = "del";
+      div.dataset.ln = `-${oldNo++}`;
+    } else {
+      div.dataset.ln = String(newNo++);
+      oldNo++;
+    }
     div.textContent = line || " ";
     frag.appendChild(div);
   }
   pre.replaceChildren(frag);
+  showSavedComments(s, f.path);
 }
+
+// ---------- review comments on the diff ----------
+// Hover a line and click + to comment on it; the comments go to the session as one prompt.
+
+const commentBtn = document.createElement("button");
+commentBtn.className = "cmt-add";
+commentBtn.type = "button";
+commentBtn.title = "Comment on this line";
+commentBtn.textContent = "+";
+
+$("#ch-diff").addEventListener("mouseover", (e) => {
+  const line = (e.target as HTMLElement).closest<HTMLElement>("div[data-ln]");
+  if (line && commentBtn.parentElement !== line && changesFor?.running) line.prepend(commentBtn);
+});
+commentBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const line = commentBtn.parentElement;
+  if (line) openCommentEditor(line);
+});
+
+const lineLabel = (ln: string) => (ln.startsWith("-") ? `${ln.slice(1)} (removed)` : ln);
+const lineCode = (line: HTMLElement) => (line.lastChild?.textContent ?? line.textContent ?? "").slice(1);
+
+function openCommentEditor(line: HTMLElement) {
+  const s = changesFor;
+  const file = changesSelected;
+  if (!s || !file) return;
+  line.parentElement?.querySelector(".cmt-editor")?.remove();
+  const box = document.createElement("div");
+  box.className = "cmt-editor";
+  box.innerHTML = `<textarea rows="3" placeholder="Comment for Claude on line ${lineLabel(line.dataset.ln!)}"></textarea><span class="cmt-btns"><button type="button" class="btn small">Cancel</button><button type="button" class="btn small primary">Add comment</button></span>`;
+  const ta = box.querySelector("textarea")!;
+  const [cancel, add] = box.querySelectorAll("button");
+  const save = () => {
+    const text = ta.value.trim();
+    if (!text) return;
+    const list = reviews.get(s) ?? [];
+    list.push({ file, line: line.dataset.ln!, code: lineCode(line), text });
+    reviews.set(s, list);
+    box.remove();
+    showSavedComments(s, file);
+    renderReview();
+  };
+  cancel.addEventListener("click", () => box.remove());
+  add.addEventListener("click", save);
+  ta.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      save();
+    } else if (e.key === "Escape") box.remove();
+  });
+  line.after(box);
+  ta.focus();
+}
+
+/** Shows the saved comments of `file` under their lines. */
+function showSavedComments(s: Session, file: string) {
+  const pre = $("#ch-diff");
+  pre.querySelectorAll(".cmt-saved").forEach((x) => x.remove());
+  const list = (reviews.get(s) ?? []).filter((c) => c.file === file);
+  for (const c of list) {
+    const line = pre.querySelector<HTMLElement>(`div[data-ln="${CSS.escape(c.line)}"]`);
+    if (!line) continue;
+    const box = document.createElement("div");
+    box.className = "cmt-saved";
+    const text = document.createElement("span");
+    text.textContent = c.text;
+    const del = document.createElement("button");
+    del.className = "icon-btn";
+    del.title = "Remove comment";
+    del.innerHTML = icon("x");
+    del.addEventListener("click", () => {
+      reviews.set(s, (reviews.get(s) ?? []).filter((x) => x !== c));
+      box.remove();
+      renderReview();
+    });
+    box.append(text, del);
+    // After the line and any comments already under it.
+    let at: Element = line;
+    while (at.nextElementSibling?.classList.contains("cmt-saved")) at = at.nextElementSibling;
+    at.after(box);
+  }
+}
+
+function renderReview() {
+  const n = changesFor ? (reviews.get(changesFor)?.length ?? 0) : 0;
+  $("#ch-review").hidden = n === 0;
+  $("#ch-review-count").textContent = `${n} comment${n === 1 ? "" : "s"} for Claude`;
+}
+
+/** The comments as one prompt: where each is, the line it's about, and what to do. */
+function reviewPrompt(list: ReviewComment[]): string {
+  const parts = list.map((c, i) => `${i + 1}. ${c.file}:${lineLabel(c.line)}\n   > ${c.code.trim()}\n   ${c.text.replace(/\n/g, "\n   ")}`);
+  return `Please address these review comments on your changes:\n\n${parts.join("\n\n")}`;
+}
+
+$("#ch-review-send").addEventListener("click", () => {
+  const s = changesFor;
+  const list = s ? reviews.get(s) : undefined;
+  if (!s || !list?.length || !s.running) return;
+  s.sendPrompt(reviewPrompt(list));
+  reviews.delete(s);
+  $("#ch-diff").querySelectorAll(".cmt-saved").forEach((x) => x.remove());
+  renderReview();
+  toast(s.el, `Sent ${list.length} comment${list.length === 1 ? "" : "s"} to Claude`);
+});
+$("#ch-review-discard").addEventListener("click", () => {
+  if (changesFor) reviews.delete(changesFor);
+  $("#ch-diff").querySelectorAll(".cmt-saved").forEach((x) => x.remove());
+  renderReview();
+});
+
+// ---------- commit, push, pull request ----------
+
+function showShipMsg(text: string, error = false) {
+  const el = $("#ch-msg");
+  el.hidden = !text;
+  el.textContent = text;
+  el.classList.toggle("error", error);
+}
+
+function renderShip() {
+  const st = changesState;
+  const s = changesFor;
+  const commit = $<HTMLButtonElement>("#ch-commit");
+  const push = $<HTMLButtonElement>("#ch-push");
+  const pr = $<HTMLButtonElement>("#ch-pr");
+  commit.disabled = shipBusy || !st?.files.length;
+  push.hidden = !st?.hasRemote || !st.ahead;
+  push.disabled = shipBusy;
+  push.textContent = st ? `Push ↑${st.ahead}` : "Push";
+  push.title = st?.upstream ? `Push ${st.ahead} commit${st.ahead === 1 ? "" : "s"} to ${st.upstream}` : "Push this branch (first push sets its upstream)";
+  pr.hidden = !st?.hasRemote;
+  pr.disabled = !s?.running;
+}
+
+async function pushNow(s: Session) {
+  shipBusy = true;
+  renderShip();
+  showShipMsg("Pushing…");
+  try {
+    await invoke<string>("git_push", { dir: dirOf(s.opts) });
+    if (changesFor === s) showShipMsg("Pushed.");
+  } catch (err) {
+    if (changesFor === s) showShipMsg(`Push failed: ${String(err) || "unknown error"}`, true);
+  } finally {
+    shipBusy = false;
+    renderShip();
+    void refreshChanges(false);
+  }
+}
+
+$("#ch-commit").addEventListener("click", () => {
+  const st = changesState;
+  if (!st?.files.length || !changesFor) return;
+  $("#cm-hint").textContent = `Commits all ${st.files.length} changed file${st.files.length === 1 ? "" : "s"}${st.branch ? ` on ${st.branch}` : ""}.`;
+  $<HTMLInputElement>("#cm-push").disabled = !st.hasRemote;
+  if (!st.hasRemote) $<HTMLInputElement>("#cm-push").checked = false;
+  const dlg = $<HTMLDialogElement>("#commit-dialog");
+  dlg.returnValue = "";
+  dlg.showModal();
+  $<HTMLTextAreaElement>("#cm-text").focus();
+});
+$<HTMLTextAreaElement>("#cm-text").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    $<HTMLFormElement>("#commit-form").requestSubmit($("#commit-form button.primary"));
+  }
+});
+$<HTMLDialogElement>("#commit-dialog").addEventListener("close", async () => {
+  const dlg = $<HTMLDialogElement>("#commit-dialog");
+  const s = changesFor;
+  const message = $<HTMLTextAreaElement>("#cm-text").value;
+  if (dlg.returnValue !== "ok" || !s || !message.trim()) return;
+  const andPush = $<HTMLInputElement>("#cm-push").checked;
+  store.set("commit", { push: andPush });
+  shipBusy = true;
+  renderShip();
+  showShipMsg("Committing…");
+  try {
+    const summary = await invoke<string>("git_commit", { dir: dirOf(s.opts), message });
+    $<HTMLTextAreaElement>("#cm-text").value = "";
+    if (changesFor === s) showShipMsg(`Committed ${summary}`);
+    shipBusy = false;
+    if (andPush) await pushNow(s);
+  } catch (err) {
+    if (changesFor === s) showShipMsg(`Commit failed: ${String(err)}`, true);
+  } finally {
+    shipBusy = false;
+    renderShip();
+    void refreshChanges(false);
+  }
+});
+$("#ch-push").addEventListener("click", () => changesFor && void pushNow(changesFor));
+$("#ch-pr").addEventListener("click", () => {
+  const s = changesFor;
+  if (!s?.running) return;
+  s.sendPrompt(
+    "Open a pull request for this branch: commit anything still outstanding, push the branch, then create the PR with a clear title and a description of what changed and why. Reply with its link.",
+  );
+  toast(s.el, "Asked Claude to open a pull request");
+});
+$<HTMLInputElement>("#cm-push").checked = store.get("commit", { push: false }).push;
 
 // Refresh while open and the window is in front: every 4 s, or at least 20x as long as
 // the last refresh took, so a very large repository doesn't keep git busy.
@@ -2278,6 +2566,68 @@ setInterval(() => {
 $("#tb-changes").addEventListener("click", () => toggleChanges());
 $("#ch-close").addEventListener("click", () => toggleChanges(false));
 $("#ch-refresh").addEventListener("click", () => void refreshChanges(false));
+
+// ---------- to-do list ----------
+// Claude's checklist (TodoWrite / TaskCreate / TaskUpdate), from the pane header's chip.
+
+const todoPop = $("#todo-pop");
+let todoPopFor: Session | null = null;
+let todoPopAnchor: HTMLElement | null = null;
+
+/** Status marks, drawn so they look the same in every font. */
+const TODO_MARK: Record<string, string> = {
+  completed: `<svg viewBox="0 0 12 12"><path d="M2.5 6.2l2.3 2.3 4.7-5" /></svg>`,
+  in_progress: `<svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.25" /><path class="fill" d="M6 1.75a4.25 4.25 0 0 1 0 8.5z" /></svg>`,
+  pending: `<svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.25" /></svg>`,
+};
+
+function renderTodoPop() {
+  const s = todoPopFor;
+  if (!s || !s.todos.length || !todoPopAnchor?.isConnected) return closeTodoPop();
+  const sum = todoSummary(s.todos)!;
+  const head = document.createElement("div");
+  head.className = "lp-head";
+  head.textContent = `To-do · ${sum.done} of ${sum.total} done`;
+  const list = document.createElement("ol");
+  list.className = "todo-list";
+  for (const t of s.todos) {
+    const li = document.createElement("li");
+    li.dataset.status = t.status;
+    const mark = document.createElement("span");
+    mark.className = "tm";
+    mark.innerHTML = TODO_MARK[t.status] ?? TODO_MARK.pending;
+    const text = document.createElement("span");
+    text.textContent = t.status === "in_progress" && t.activeForm ? t.activeForm : t.subject;
+    li.append(mark, text);
+    list.append(li);
+  }
+  todoPop.replaceChildren(head, list);
+  const r = todoPopAnchor.getBoundingClientRect();
+  todoPop.hidden = false;
+  const w = todoPop.offsetWidth;
+  todoPop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - w - 8))}px`;
+  todoPop.style.top = `${r.bottom + 6}px`;
+}
+
+function toggleTodoPop(s: Session, anchor: HTMLElement) {
+  if (todoPopFor === s && !todoPop.hidden) return closeTodoPop();
+  todoPopFor = s;
+  todoPopAnchor = anchor;
+  renderTodoPop();
+}
+
+function closeTodoPop() {
+  todoPopFor = null;
+  todoPopAnchor = null;
+  todoPop.hidden = true;
+}
+document.addEventListener("pointerdown", (e) => {
+  if (!todoPop.hidden && !todoPop.contains(e.target as Node) && !(e.target as HTMLElement).closest(".todo-chip")) closeTodoPop();
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !todoPop.hidden) closeTodoPop();
+});
+window.addEventListener("resize", closeTodoPop);
 
 // ---------- documents panel ----------
 // Plans, markdown files and artifacts the active session's conversations produced.
@@ -2949,6 +3299,7 @@ $("#tb-search").title = `Search terminal (${isMac ? "⌘F" : "Ctrl+Shift+F"})`;
   $("#tb-changes").title = `Changes (${mod}G)`;
   $("#tb-docs").title = `Documents: plans and artifacts (${mod}D)`;
   $("#bc-kbd").textContent = isMac ? "⌘↵" : "Ctrl+↵";
+  $("#cm-kbd").textContent = isMac ? "⌘↵" : "Ctrl+↵";
 }
 if (isMac) document.body.classList.add("mac");
 

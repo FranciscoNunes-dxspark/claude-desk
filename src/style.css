@@ -1060,6 +1060,105 @@ body.changes-open #terminals { margin-right: 400px; }
 .ch-diff .meta { color: var(--text-3); }
 #tb-changes.on { color: var(--accent); background: var(--accent-soft); }
 
+/* Review comments on diff lines, and committing / pushing. */
+.ch-diff > div[data-ln] { position: relative; }
+.cmt-add {
+  position: absolute;
+  left: 1px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 4px;
+  border: 0;
+  background: var(--accent);
+  color: #1a1410;
+  font: 700 12px/1 var(--sans);
+  cursor: pointer;
+  opacity: 0;
+}
+.ch-diff > div:hover > .cmt-add, .cmt-add:focus-visible { opacity: 1; }
+.cmt-editor, .cmt-saved {
+  margin: 4px 10px 6px 18px;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid var(--accent-border);
+  background: var(--surface);
+  font-family: var(--sans);
+  white-space: normal;
+}
+.cmt-editor { display: grid; gap: 6px; }
+.cmt-editor textarea { width: 100%; box-sizing: border-box; resize: vertical; font: 12.5px/1.45 var(--sans); }
+.cmt-btns { display: flex; justify-content: flex-end; gap: 6px; }
+.cmt-saved { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; background: var(--accent-faint); }
+.cmt-saved span { flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cmt-saved .icon-btn { width: 20px; height: 20px; flex: none; }
+.cmt-saved .icon-btn .ic { width: 12px; height: 12px; }
+
+.ch-foot { flex: none; border-top: 1px solid var(--hairline-strong); display: grid; }
+.ch-review { display: flex; align-items: center; gap: 6px; padding: 7px 10px 7px 14px; background: var(--accent-faint); border-bottom: 1px solid var(--hairline); font-size: 12px; }
+.ch-review[hidden] { display: none; }
+.ch-review span { flex: 1; color: var(--accent); font-weight: 600; }
+.ch-msg { padding: 6px 14px; font-size: 11.5px; color: var(--text-2); border-bottom: 1px solid var(--hairline); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 90px; overflow-y: auto; user-select: text; -webkit-user-select: text; }
+.ch-msg[hidden] { display: none; }
+.ch-msg.error { color: var(--bad); }
+.ch-ship { display: flex; align-items: center; gap: 6px; padding: 8px 10px; }
+.ch-ship .spacer { flex: 1; }
+.ch-ship [hidden] { display: none; }
+.btn.small.primary { color: #1a1410; }
+.btn:disabled { opacity: .5; pointer-events: none; }
+
+/* ---------- to-do list ---------- */
+
+.todo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 260px;
+  height: 22px;
+  padding: 0 8px 0 6px;
+  border-radius: 11px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11px;
+  flex: 0 1 auto;
+}
+.todo-chip[hidden] { display: none; }
+.todo-chip:hover { border-color: var(--border-hover); color: var(--text); }
+.todo-chip .ic { width: 13px; height: 13px; flex: none; color: var(--accent); }
+.todo-chip b { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); flex: none; }
+.todo-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.todo-chip.all .ic { color: var(--ok); }
+.todo-count {
+  flex: none;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+}
+.todo-count[hidden] { display: none; }
+.todo-count.all { color: var(--ok); background: transparent; }
+#tabs li:hover .todo-count { display: none; }
+body.sidebar-collapsed .todo-count { display: none; }
+
+.todo-pop { width: 320px; max-height: min(420px, 70vh); overflow-y: auto; gap: 8px; animation: none; }
+.todo-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.todo-list li { display: grid; grid-template-columns: 16px 1fr; gap: 6px; line-height: 1.4; }
+.todo-list .tm { display: grid; place-items: center; height: 1.4em; color: var(--text-3); }
+.todo-list .tm svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.todo-list .tm .fill { fill: currentColor; stroke: none; }
+.todo-list li[data-status="in_progress"] { color: var(--text); font-weight: 600; }
+.todo-list li[data-status="in_progress"] .tm { color: var(--accent); }
+.todo-list li[data-status="completed"] { color: var(--text-3); text-decoration: line-through; text-decoration-color: var(--hairline-strong); }
+.todo-list li[data-status="completed"] .tm { color: var(--ok); }
+
 /* ---------- documents panel ---------- */
 /* Reuses the changes panel's frame; reading a plan wants more room, so it can widen. */
 

@@ -15,6 +15,22 @@ export interface Doc {
   writes: number;
 }
 
+/** One item of Claude's to-do list (see src-tauri/src/docs.rs). */
+export interface Todo {
+  id: string;
+  subject: string;
+  status: "pending" | "in_progress" | "completed" | string;
+  activeForm: string | null;
+}
+
+/** "3/7", and what Claude is doing now, for a to-do list; null when there's none. */
+export function todoSummary(todos: Todo[]): { done: number; total: number; now: string | null } | null {
+  if (!todos.length) return null;
+  const done = todos.filter((t) => t.status === "completed").length;
+  const cur = todos.find((t) => t.status === "in_progress");
+  return { done, total: todos.length, now: cur ? cur.activeForm || cur.subject : null };
+}
+
 /** Identifies a document across refreshes and conversations. */
 export const docKey = (d: Doc) => d.url ?? `${d.kind}:${d.path ?? ""}`;
 

@@ -1,5 +1,5 @@
-//! The documents a session's conversation produced: markdown files Claude wrote or
-//! edited, its plans, and the artifacts it published on claude.ai. Read from the file
+//! What a session's conversation produced: markdown files Claude wrote or edited, its
+//! plans, the artifacts it published on claude.ai, and its to-do list. Read from the file
 //! Claude Code writes (`~/.claude/projects/<folder>/<id>.jsonl`), like `usage`, and only
 //! what was appended since the last call.
 //!
@@ -41,13 +41,41 @@ pub struct Doc {
     pub writes: u32,
 }
 
+/// One item of Claude's to-do list (TodoWrite, or TaskCreate / TaskUpdate).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Todo {
+    /// The task's number (TaskCreate); empty for TodoWrite's items.
+    pub id: String,
+    pub subject: String,
+    /// "pending", "in_progress" or "completed".
+    pub status: String,
+    /// What Claude shows while it's in progress ("Running tests").
+    pub active_form: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Activity {
+    /// Newest first.
+    pub docs: Vec<Doc>,
+    /// In Claude's order.
+    pub todos: Vec<Todo>,
+}
+
+/// A tool call whose result is still to come: it counts once it succeeds.
+enum Pending {
+    Doc(Doc),
+    Create(Todo),
+    Update(Value),
+}
+
 #[derive(Default)]
 struct Tracked {
     offset: u64,
     /// Most recently written last.
     docs: Vec<Doc>,
-    /// Tool calls whose result is still to come: they count once they succeed.
-    pending: HashMap<String, Doc>,
+    todos: Vec<Todo>,
+    pending: HashMap<String, Pending>,
 }
 
 fn known() -> &'static Mutex<HashSet<PathBuf>> {
@@ -126,6 +154,7 @@ impl Tracked {
             return;
         }
         let Ok(e) = serde_json::from_slice::<Value>(line) else { return };
+        let extra = e.get("toolUseResult");
         let at = str_of(&e, "timestamp").map(str::to_owned);
         let Some(Value::Array(blocks)) = e.get("message").and_then(|m| m.get("content")) else { return };
         for b in blocks {
@@ -133,10 +162,30 @@ impl Tracked {
                 Some("tool_use") => self.tool_use(b, &at),
                 Some("tool_result") => {
                     let Some(id) = str_of(b, "tool_use_id") else { continue };
-                    let Some(mut doc) = self.pending.remove(id) else { continue };
+                    let Some(pending) = self.pending.remove(id) else { continue };
                     if b.get("is_error").and_then(Value::as_bool) == Some(true) {
                         continue;
                     }
+                    let mut doc = match pending {
+                        Pending::Doc(d) => d,
+                        Pending::Create(mut todo) => {
+                            // The new task's number: in the result's details, or its text
+                            // ("Task #3 created successfully: …").
+                            let text = result_text(b.get("content"));
+                            todo.id = extra
+                                .and_then(|x| x.get("task"))
+                                .and_then(|t| t.get("id"))
+                                .and_then(|v| v.as_str().map(str::to_owned).or_else(|| v.as_u64().map(|n| n.to_string())))
+                                .or_else(|| text.split_once("Task #").map(|(_, r)| r.chars().take_while(char::is_ascii_digit).collect()))
+                                .unwrap_or_default();
+                            self.todos.push(todo);
+                            continue;
+                        }
+                        Pending::Update(input) => {
+                            self.update_task(&input);
+                            continue;
+                        }
+                    };
                     if doc.kind == "artifact" {
                         let text = result_text(b.get("content"));
                         // Only publishes that went through; other artifact calls (reads,
@@ -168,7 +217,7 @@ impl Tracked {
                 let Some(path) = str_of(input, "file_path") else { return };
                 if is_markdown(path) {
                     let kind = if is_plan_file(path) { "plan" } else { "markdown" };
-                    self.pending.insert(id.to_owned(), doc(kind, Some(path)));
+                    self.pending.insert(id.to_owned(), Pending::Doc(doc(kind, Some(path))));
                 }
             }
             // The plan Claude asks to go ahead with. It counts even if the user turns it
@@ -192,9 +241,59 @@ impl Tracked {
                 let mut d = doc("artifact", Some(path));
                 d.title = str_of(input, "title").map(str::to_owned);
                 d.description = str_of(input, "description").map(str::to_owned);
-                self.pending.insert(id.to_owned(), d);
+                self.pending.insert(id.to_owned(), Pending::Doc(d));
+            }
+            // The whole list at once.
+            "TodoWrite" => {
+                let Some(Value::Array(items)) = input.get("todos") else { return };
+                self.todos = items
+                    .iter()
+                    .filter_map(|t| {
+                        Some(Todo {
+                            id: String::new(),
+                            subject: str_of(t, "content").or_else(|| str_of(t, "subject"))?.to_owned(),
+                            status: str_of(t, "status").unwrap_or("pending").to_owned(),
+                            active_form: str_of(t, "activeForm").map(str::to_owned),
+                        })
+                    })
+                    .collect();
+            }
+            "TaskCreate" => {
+                let Some(subject) = str_of(input, "subject") else { return };
+                let todo = Todo {
+                    id: String::new(),
+                    subject: subject.to_owned(),
+                    status: "pending".into(),
+                    active_form: str_of(input, "activeForm").map(str::to_owned),
+                };
+                self.pending.insert(id.to_owned(), Pending::Create(todo));
+            }
+            "TaskUpdate" => {
+                self.pending.insert(id.to_owned(), Pending::Update(input.clone()));
             }
             _ => {}
+        }
+    }
+
+    fn update_task(&mut self, input: &Value) {
+        let Some(id) = input.get("taskId").and_then(|v| v.as_str().map(str::to_owned).or_else(|| v.as_u64().map(|n| n.to_string())))
+        else {
+            return;
+        };
+        let Some(i) = self.todos.iter().position(|t| t.id == id) else { return };
+        match str_of(input, "status") {
+            Some("deleted") => {
+                self.todos.remove(i);
+                return;
+            }
+            Some(st) => self.todos[i].status = st.to_owned(),
+            None => {}
+        }
+        if let Some(subject) = str_of(input, "subject") {
+            self.todos[i].subject = subject.to_owned();
+        }
+        if let Some(form) = str_of(input, "activeForm") {
+            self.todos[i].active_form = Some(form.to_owned());
         }
     }
 }
@@ -203,11 +302,11 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
     hay.windows(needle.len()).any(|w| w == needle)
 }
 
-/// Documents of the conversation file at `path`, newest first.
-fn documents_of(path: &Path) -> Vec<Doc> {
+/// What the conversation file at `path` produced.
+fn activity_of(path: &Path) -> Activity {
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, Tracked>>> = OnceLock::new();
-    let Ok(mut file) = fs::File::open(path) else { return Vec::new() };
-    let Ok(len) = file.metadata().map(|m| m.len()) else { return Vec::new() };
+    let Ok(mut file) = fs::File::open(path) else { return Activity::default() };
+    let Ok(len) = file.metadata().map(|m| m.len()) else { return Activity::default() };
     let mut cache = lock(CACHE.get_or_init(Default::default));
     let t = cache.entry(path.to_path_buf()).or_default();
     if len < t.offset {
@@ -224,19 +323,19 @@ fn documents_of(path: &Path) -> Vec<Doc> {
             t.offset += end as u64;
         }
     }
-    t.docs.iter().rev().cloned().collect()
+    Activity { docs: t.docs.iter().rev().cloned().collect(), todos: t.todos.clone() }
 }
 
-/// The documents conversation `id` in `cwd` has produced so far, newest first.
+/// The documents and to-do list of conversation `id` in `cwd` so far.
 #[tauri::command]
-pub async fn conversation_documents(cwd: String, id: String) -> Vec<Doc> {
+pub async fn conversation_activity(cwd: String, id: String) -> Activity {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        return Vec::new();
+        return Activity::default();
     }
     let Some(path) = claude_dir().map(|d| d.join("projects").join(project_key(&cwd)).join(format!("{id}.jsonl"))) else {
-        return Vec::new();
+        return Activity::default();
     };
-    tauri::async_runtime::spawn_blocking(move || documents_of(&path)).await.unwrap_or_default()
+    tauri::async_runtime::spawn_blocking(move || activity_of(&path)).await.unwrap_or_default()
 }
 
 #[derive(Serialize, PartialEq, Debug)]
@@ -352,7 +451,7 @@ mod tests {
             write!(f, "{l}").unwrap();
         }
         f.flush().unwrap();
-        let docs = documents_of(&path);
+        let docs = activity_of(&path).docs;
         let kinds: Vec<_> = docs.iter().map(|d| d.kind).collect();
         assert_eq!(kinds, ["artifact", "plan", "markdown"], "{docs:?}");
         assert_eq!(docs[0].url.as_deref(), Some("https://claude.ai/artifact/AbC123"));
@@ -364,11 +463,46 @@ mod tests {
         // tool call whose result hasn't arrived yet doesn't count.
         write!(f, "{}", use_line("e1", "Edit", serde_json::json!({"file_path":"/p/PLAN.md"}))).unwrap();
         f.flush().unwrap();
-        assert_eq!(documents_of(&path)[0].kind, "artifact");
+        assert_eq!(activity_of(&path).docs[0].kind, "artifact");
         write!(f, "{}", result_line("e1", Value::String("ok".into()), false)).unwrap();
         f.flush().unwrap();
-        let docs = documents_of(&path);
+        let docs = activity_of(&path).docs;
         assert_eq!((docs[0].path.as_deref(), docs[0].writes, docs.len()), (Some("/p/PLAN.md"), 2, 3));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn follows_the_todo_list() {
+        let path = std::env::temp_dir().join(format!("switchyard-todos-{}.jsonl", std::process::id()));
+        let task_result = |id: &str, n: &str| {
+            serde_json::json!({"type":"user","toolUseResult":{"task":{"id":n}},"message":{"content":[{"type":"tool_result","tool_use_id":id,"content":format!("Task #{n} created successfully")}]}}).to_string() + "\n"
+        };
+        let lines = [
+            use_line("c1", "TaskCreate", serde_json::json!({"subject":"Read","description":"x","activeForm":"Reading"})),
+            task_result("c1", "1"),
+            use_line("c2", "TaskCreate", serde_json::json!({"subject":"Fix","description":"x"})),
+            result_line("c2", Value::String("Task #2 created successfully: Fix".into()), false),
+            use_line("c3", "TaskCreate", serde_json::json!({"subject":"Gone","description":"x"})),
+            task_result("c3", "3"),
+            use_line("u1", "TaskUpdate", serde_json::json!({"taskId":"1","status":"completed"})),
+            result_line("u1", Value::String("Updated task #1 status".into()), false),
+            use_line("u2", "TaskUpdate", serde_json::json!({"taskId":"2","status":"in_progress","subject":"Fix it"})),
+            result_line("u2", Value::String("ok".into()), false),
+            use_line("u3", "TaskUpdate", serde_json::json!({"taskId":"3","status":"deleted"})),
+            result_line("u3", Value::String("ok".into()), false),
+        ];
+        fs::write(&path, lines.concat()).unwrap();
+        let t = activity_of(&path).todos;
+        let got: Vec<_> = t.iter().map(|t| (t.id.as_str(), t.subject.as_str(), t.status.as_str())).collect();
+        assert_eq!(got, [("1", "Read", "completed"), ("2", "Fix it", "in_progress")]);
+        assert_eq!(t[0].active_form.as_deref(), Some("Reading"));
+
+        // TodoWrite replaces the whole list.
+        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        write!(f, "{}", use_line("t1", "TodoWrite", serde_json::json!({"todos":[{"content":"A","status":"completed","activeForm":"Aing"},{"content":"B","status":"pending","activeForm":"Bing"}]}))).unwrap();
+        f.flush().unwrap();
+        let t = activity_of(&path).todos;
+        assert_eq!(t.iter().map(|t| t.subject.as_str()).collect::<Vec<_>>(), ["A", "B"]);
         let _ = fs::remove_file(&path);
     }
 
@@ -404,7 +538,11 @@ mod real {
     #[ignore]
     fn docs_of_file() {
         let Some(path) = std::env::var_os("DOCS_FILE") else { return };
-        for d in super::documents_of(std::path::Path::new(&path)) {
+        let a = super::activity_of(std::path::Path::new(&path));
+        for t in &a.todos {
+            println!("todo #{} [{}] {}", t.id, t.status, t.subject);
+        }
+        for d in a.docs {
             println!("{} {:?} {:?} {:?} x{}", d.kind, d.path, d.url, d.description, d.writes);
         }
     }

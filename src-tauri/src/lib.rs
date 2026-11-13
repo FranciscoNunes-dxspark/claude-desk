@@ -47,13 +47,15 @@ pub fn run() {
             git::worktree_info,
             git::git_changes,
             git::git_diff,
+            git::git_commit,
+            git::git_push,
             extras::conversation_exists,
             extras::git_branch,
             extras::save_clipboard_image,
             extras::read_clipboard_text,
             extras::write_clipboard_text,
             usage::conversation_usage,
-            docs::conversation_documents,
+            docs::conversation_activity,
             docs::read_document,
         ])
         .run(tauri::generate_context!())

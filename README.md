@@ -16,7 +16,13 @@ The app adds a window around it:
 - **Worktree per session** – start a session in its own git worktree and branch (Claude Code's
   `--worktree`), so parallel sessions on one repository don't edit the same files.
 - **Changes panel** – the files the active session has changed, with +/− counts and a diff view
-  (⌘G / Ctrl+Shift+G).
+  (⌘G / Ctrl+Shift+G). Hover a diff line and click **+** to leave Claude a comment on it; **Send to
+  Claude** sends all of them as one prompt, with each file, line and the code it's about. **Commit…**
+  commits every change (optionally pushing it), **Push** sends unpushed commits (the first push sets
+  the upstream; it never stops to ask for a password), and **Open PR with Claude** asks the session to
+  push the branch and open a pull request.
+- **To-do list** – Claude's checklist (TodoWrite, or its task tools) as a progress count on each tab and
+  a chip in the pane header showing the current step; click it for the whole list.
 - **Documents panel** – the plans, markdown files and claude.ai artifacts the session's conversation
   produced, newest first: plans and markdown rendered (and kept current while Claude edits them),
   artifacts previewed in a sandboxed frame with a link to claude.ai. A session that writes a new one
